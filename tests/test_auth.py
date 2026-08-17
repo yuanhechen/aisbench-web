@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 from collections.abc import AsyncIterator
 from datetime import datetime, timedelta, timezone
@@ -100,6 +101,7 @@ async def test_registration_rejects_case_insensitive_duplicate(
 
 @pytest.mark.asyncio
 async def test_username_case_insensitivity_supports_unicode(
+    auth_app: FastAPI,
     client: httpx.AsyncClient,
 ) -> None:
     registration = await client.post(
@@ -121,6 +123,37 @@ async def test_username_case_insensitivity_supports_unicode(
     assert login.status_code == 200
     assert login.json()["username"] == "Élodie"
     assert duplicate.status_code == 409
+    with auth_app.state.database.connect() as connection:
+        stored_user = connection.execute("SELECT username, username_key FROM users").fetchone()
+    assert tuple(stored_user) == ("Élodie", "élodie")
+
+
+@pytest.mark.asyncio
+async def test_concurrent_unicode_equivalent_registrations_create_one_user(
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    transport = httpx.ASGITransport(app=auth_app)
+    async with (
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as first,
+        httpx.AsyncClient(transport=transport, base_url="http://testserver") as second,
+    ):
+        responses = await asyncio.gather(
+            first.post(
+                "/api/auth/register",
+                json={"username": "Straße", "password": "password one"},
+            ),
+            second.post(
+                "/api/auth/register",
+                json={"username": "STRASSE", "password": "password two"},
+            ),
+        )
+
+    assert sorted(response.status_code for response in responses) == [201, 409]
+    with auth_app.state.database.connect() as connection:
+        users = connection.execute("SELECT username, username_key FROM users").fetchall()
+    assert len(users) == 1
+    assert users[0]["username_key"] == "strasse"
 
 
 @pytest.mark.asyncio
@@ -128,15 +161,222 @@ async def test_short_password_is_validation_error_and_inserts_no_user(
     auth_app: FastAPI,
     client: httpx.AsyncClient,
 ) -> None:
+    password = "s3cr3t"
     response = await client.post(
         "/api/auth/register",
-        json={"username": "alice", "password": "short"},
+        json={"username": "alice", "password": password},
     )
 
     assert response.status_code == 422
+    assert password not in response.text
     with auth_app.state.database.connect() as connection:
         count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
     assert count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("username", "password"),
+    [
+        ("u" * 129, "password one"),
+        ("alice", "sensitive-registration-marker-" + "x" * 1_024),
+    ],
+)
+async def test_oversized_registration_input_is_rejected_before_hashing(
+    username: str,
+    password: str,
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aisbench_web.api import auth as auth_api
+
+    hash_calls: list[str] = []
+
+    def record_hash(value: str) -> str:
+        hash_calls.append(value)
+        return "unused hash"
+
+    monkeypatch.setattr(auth_api, "hash_password", record_hash)
+
+    response = await client.post(
+        "/api/auth/register",
+        json={"username": username, "password": password},
+    )
+
+    assert response.status_code == 422
+    assert hash_calls == []
+    assert password not in response.text
+
+
+@pytest.mark.asyncio
+async def test_oversized_login_password_is_rejected_before_verification(
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aisbench_web.api import auth as auth_api
+
+    password = "sensitive-login-marker-" + "x" * 1_024
+    verification_calls: list[tuple[str, str]] = []
+
+    def record_verification(encoded: str, value: str) -> bool:
+        verification_calls.append((encoded, value))
+        return False
+
+    monkeypatch.setattr(auth_api, "verify_password", record_verification)
+
+    response = await client.post(
+        "/api/auth/login",
+        json={"username": "nobody", "password": password},
+    )
+
+    assert response.status_code == 422
+    assert verification_calls == []
+    assert password not in response.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "password"),
+    [
+        ("/api/auth/register", {"secret": "registration-password-marker"}),
+        ("/api/auth/login", ["login-password-marker"]),
+    ],
+)
+async def test_invalid_password_types_are_not_reflected_in_validation_errors(
+    path: str,
+    password: object,
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        path,
+        json={"username": "alice", "password": password},
+    )
+
+    assert response.status_code == 422
+    assert "password-marker" not in response.text
+    with auth_app.state.database.connect() as connection:
+        user_count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert user_count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        (
+            "/api/auth/register",
+            '{"username":"\\ud800alice","password":"password one"}',
+        ),
+        (
+            "/api/auth/register",
+            '{"username":"alice","password":"\\ud800password"}',
+        ),
+        (
+            "/api/auth/login",
+            '{"username":"\\ud800alice","password":"password one"}',
+        ),
+        (
+            "/api/auth/login",
+            '{"username":"alice","password":"\\ud800password"}',
+        ),
+    ],
+)
+async def test_non_utf8_text_is_rejected_before_password_work(
+    path: str,
+    body: str,
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from aisbench_web.api import auth as auth_api
+
+    password_work: list[str] = []
+
+    def record_hash(password: str) -> str:
+        password_work.append(password)
+        return "unused hash"
+
+    def record_verification(encoded: str, password: str) -> bool:
+        password_work.append(password)
+        return False
+
+    monkeypatch.setattr(auth_api, "hash_password", record_hash)
+    monkeypatch.setattr(auth_api, "verify_password", record_verification)
+
+    response = await client.post(
+        path,
+        content=body.encode("ascii"),
+        headers={"Content-Type": "application/json"},
+    )
+
+    assert response.status_code == 422
+    assert password_work == []
+    with auth_app.state.database.connect() as connection:
+        user_count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert user_count == 0
+
+
+def test_malformed_password_hash_is_a_failed_verification() -> None:
+    from aisbench_web.security import verify_password
+
+    assert not verify_password("not-an-argon2-hash", "password one")
+
+
+def test_password_work_is_limited_to_two_concurrent_operations(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    from aisbench_web import security
+
+    state_lock = threading.Lock()
+    two_entered = threading.Event()
+    release = threading.Event()
+    active = 0
+    max_active = 0
+
+    class TrackingHasher:
+        def _work(self) -> None:
+            nonlocal active, max_active
+            with state_lock:
+                active += 1
+                max_active = max(max_active, active)
+                if active >= 2:
+                    two_entered.set()
+            release.wait(timeout=2)
+            with state_lock:
+                active -= 1
+
+        def hash(self, password: str) -> str:
+            self._work()
+            return f"encoded:{password}"
+
+        def verify(self, encoded: str, password: str) -> bool:
+            self._work()
+            return encoded == f"encoded:{password}"
+
+    tracking_hasher = TrackingHasher()
+    monkeypatch.setattr(security, "_PASSWORD_HASHER", tracking_hasher, raising=False)
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = [
+            executor.submit(
+                security.hash_password if index % 2 == 0 else security.verify_password,
+                *("password one",) if index % 2 == 0 else ("encoded:password one", "password one"),
+            )
+            for index in range(6)
+        ]
+        assert two_entered.wait(timeout=1)
+        threading.Event().wait(0.05)
+        with state_lock:
+            observed_max_active = max_active
+        release.set()
+        for future in futures:
+            future.result(timeout=2)
+
+    assert observed_max_active == 2
 
 
 @pytest.mark.asyncio
@@ -280,6 +520,52 @@ async def test_expired_session_is_rejected(
 
 
 @pytest.mark.asyncio
+async def test_creating_session_removes_expired_sessions(
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    from aisbench_web.security import session_token_digest
+
+    registration = await client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password one"},
+    )
+    assert registration.status_code == 201
+    expired_token_hash = session_token_digest(client.cookies[SESSION_COOKIE])
+    expired_at = (datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat()
+    with auth_app.state.database.connect() as connection:
+        connection.execute(
+            "UPDATE sessions SET expires_at = ? WHERE token_hash = ?",
+            (expired_at, expired_token_hash),
+        )
+
+    client.cookies.clear()
+    login = await client.post(
+        "/api/auth/login",
+        json={"username": "Alice", "password": "password one"},
+    )
+
+    assert login.status_code == 200
+    with auth_app.state.database.connect() as connection:
+        expired_count = connection.execute(
+            "SELECT COUNT(*) FROM sessions WHERE token_hash = ?",
+            (expired_token_hash,),
+        ).fetchone()[0]
+        session_count = connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+    assert expired_count == 0
+    assert session_count == 1
+
+
+def test_new_session_token_uses_shared_digest_function() -> None:
+    from aisbench_web.security import new_session_token, session_token_digest
+
+    token, digest = new_session_token()
+
+    assert digest == session_token_digest(token)
+    assert len(digest) == 64
+
+
+@pytest.mark.asyncio
 async def test_database_contains_only_password_hash_and_session_digest(
     auth_app: FastAPI,
     client: httpx.AsyncClient,
@@ -342,7 +628,7 @@ async def test_post_origin_must_be_well_formed_and_match_request_authority(
     matching = await client.post(
         "/api/auth/register",
         json=payload,
-        headers={"Origin": "HTTPS://TESTSERVER"},
+        headers={"Origin": "HTTP://TESTSERVER"},
     )
     missing = await client.post(
         "/api/auth/register",
@@ -350,6 +636,98 @@ async def test_post_origin_must_be_well_formed_and_match_request_authority(
     )
     assert matching.status_code == 201
     assert missing.status_code == 201
+
+
+@pytest.mark.asyncio
+async def test_origin_scheme_must_match_request_scheme(
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password one"},
+        headers={"Origin": "https://testserver"},
+    )
+
+    assert response.status_code == 403
+    with auth_app.state.database.connect() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_url", "headers"),
+    [
+        ("http://testserver", {"Origin": "http://testserver:80"}),
+        ("https://testserver", {"Origin": "https://testserver:443"}),
+        (
+            "http://testserver",
+            {"Origin": "http://testserver", "Host": "testserver:80"},
+        ),
+    ],
+)
+async def test_origin_default_ports_are_canonicalized(
+    base_url: str,
+    headers: dict[str, str],
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    transport = httpx.ASGITransport(app=auth_app)
+    async with httpx.AsyncClient(transport=transport, base_url=base_url) as authority_client:
+        response = await authority_client.post(
+            "/api/auth/register",
+            json={"username": "alice", "password": "password one"},
+            headers=headers,
+        )
+
+    assert response.status_code == 201
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "hosts",
+    [
+        ["testserver", "testserver"],
+        ["testserver", "attacker.example"],
+    ],
+)
+async def test_origin_bearing_mutation_rejects_duplicate_host_headers(
+    hosts: list[str],
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password one"},
+        headers=[("Origin", "http://testserver"), *(("Host", host) for host in hosts)],
+    )
+
+    assert response.status_code == 403
+    with auth_app.state.database.connect() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert count == 0
+
+
+@pytest.mark.asyncio
+async def test_origin_bearing_mutation_rejects_missing_host_header(
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    request = client.build_request(
+        "POST",
+        "/api/auth/register",
+        json={"username": "alice", "password": "password one"},
+        headers={"Origin": "http://testserver"},
+    )
+    del request.headers["host"]
+
+    response = await client.send(request)
+
+    assert response.status_code == 403
+    with auth_app.state.database.connect() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert count == 0
 
 
 @pytest.mark.asyncio

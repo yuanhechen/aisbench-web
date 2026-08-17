@@ -1,10 +1,9 @@
-import hashlib
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, Request, status
 
 from aisbench_web.repositories.users import User, UserRepository
-from aisbench_web.security import SESSION_COOKIE
+from aisbench_web.security import SESSION_COOKIE, session_token_digest
 
 
 def get_user_repository(request: Request) -> UserRepository:
@@ -21,7 +20,7 @@ def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="not authenticated",
         )
-    token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    token_hash = session_token_digest(token)
     user = repository.get_user_by_session_hash(token_hash)
     if user is None:
         raise HTTPException(

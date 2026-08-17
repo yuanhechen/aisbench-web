@@ -54,28 +54,27 @@ class UserRepository:
             last_login_at=None,
         )
         session = self._new_session(user.id, token_hash, timestamp)
+        username_key = username.casefold()
 
         with self.database.connect() as connection:
-            connection.execute("BEGIN IMMEDIATE")
-            existing_usernames = connection.execute("SELECT username FROM users").fetchall()
-            if any(row["username"].casefold() == username.casefold() for row in existing_usernames):
-                raise DuplicateUsernameError(username)
             try:
                 connection.execute(
                     """
-                    INSERT INTO users (id, username, password_hash, created_at, last_login_at)
-                    VALUES (?, ?, ?, ?, ?)
+                    INSERT INTO users (
+                      id, username, username_key, password_hash, created_at, last_login_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
                     """,
                     (
                         user.id,
                         user.username,
+                        username_key,
                         password_hash,
                         user.created_at,
                         user.last_login_at,
                     ),
                 )
             except sqlite3.IntegrityError as exc:
-                if "users.username" not in str(exc):
+                if "users.username_key" not in str(exc):
                     raise
                 raise DuplicateUsernameError(username) from exc
             self._insert_session(connection, session)
@@ -87,25 +86,10 @@ class UserRepository:
                 """
                 SELECT id, username, password_hash, created_at, last_login_at
                 FROM users
-                WHERE username = ? COLLATE NOCASE
+                WHERE username_key = ?
                 """,
-                (username,),
+                (username.casefold(),),
             ).fetchone()
-            if row is None:
-                rows = connection.execute(
-                    """
-                    SELECT id, username, password_hash, created_at, last_login_at
-                    FROM users
-                    """
-                ).fetchall()
-                row = next(
-                    (
-                        candidate
-                        for candidate in rows
-                        if candidate["username"].casefold() == username.casefold()
-                    ),
-                    None,
-                )
         if row is None:
             return None
         return UserCredentials(
@@ -197,6 +181,10 @@ class UserRepository:
 
     @staticmethod
     def _insert_session(connection: sqlite3.Connection, session: Session) -> None:
+        connection.execute(
+            "DELETE FROM sessions WHERE expires_at <= ?",
+            (session.created_at,),
+        )
         connection.execute(
             """
             INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at)

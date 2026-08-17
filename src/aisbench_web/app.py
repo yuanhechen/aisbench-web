@@ -3,6 +3,8 @@ from ipaddress import AddressValueError, IPv4Address, IPv6Address
 from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from starlette.responses import JSONResponse
 
 from aisbench_web.api.auth import router as auth_router
@@ -14,6 +16,7 @@ REG_NAME_CHARACTERS = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~!$&'()*+,;="
 )
 HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
+DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 def _is_valid_reg_name(host: str) -> bool:
@@ -50,41 +53,48 @@ def _is_valid_port_suffix(suffix: str) -> bool:
     )
 
 
-def _is_well_formed_authority(authority: str) -> bool:
+def _parse_authority(authority: str) -> tuple[str, int | None] | None:
     if authority.startswith("["):
         closing_bracket = authority.find("]")
         if closing_bracket == -1:
-            return False
+            return None
         ipv6_literal = authority[1:closing_bracket]
         if "%" in ipv6_literal:
-            return False
+            return None
         try:
-            IPv6Address(ipv6_literal)
+            host = str(IPv6Address(ipv6_literal))
         except AddressValueError:
-            return False
-        return _is_valid_port_suffix(authority[closing_bracket + 1 :])
+            return None
+        suffix = authority[closing_bracket + 1 :]
+        if not _is_valid_port_suffix(suffix):
+            return None
+        return host, int(suffix[1:]) if suffix else None
 
     if "[" in authority or "]" in authority:
-        return False
+        return None
     host, separator, port = authority.rpartition(":")
     if not separator:
         host = authority
     elif ":" in host:
-        return False
+        return None
 
     if not _is_valid_reg_name(host):
-        return False
+        return None
     if "." in host and all(character in "0123456789." for character in host):
         try:
-            IPv4Address(host)
+            host = str(IPv4Address(host))
         except AddressValueError:
-            return False
-    return _is_valid_port_suffix(f":{port}" if separator else "")
+            return None
+    suffix = f":{port}" if separator else ""
+    if not _is_valid_port_suffix(suffix):
+        return None
+    return host.lower(), int(port) if separator else None
 
 
-def _origin_matches_host(origin: str, host: str | None) -> bool:
+def _origin_matches_request(origin: str, host: str, request_scheme: str) -> bool:
+    request_scheme = request_scheme.lower()
     if (
-        host is None
+        request_scheme not in DEFAULT_PORTS
         or origin.casefold() == "null"
         or "?" in origin
         or "#" in origin
@@ -93,11 +103,10 @@ def _origin_matches_host(origin: str, host: str | None) -> bool:
         return False
     try:
         parsed = urlsplit(origin)
-        parsed_port = parsed.port
     except ValueError:
         return False
     if (
-        parsed.scheme.casefold() not in {"http", "https"}
+        parsed.scheme.casefold() not in DEFAULT_PORTS
         or not parsed.netloc
         or parsed.hostname is None
         or parsed.username is not None
@@ -107,11 +116,23 @@ def _origin_matches_host(origin: str, host: str | None) -> bool:
         or parsed.fragment
     ):
         return False
-    if not _is_well_formed_authority(parsed.netloc) or not _is_well_formed_authority(host):
+    origin_authority = _parse_authority(parsed.netloc)
+    request_authority = _parse_authority(host)
+    if origin_authority is None or request_authority is None:
         return False
-    if parsed_port is not None and not 0 < parsed_port < 65536:
-        return False
-    return parsed.netloc.lower() == host.lower()
+
+    origin_host, origin_port = origin_authority
+    request_host, request_port = request_authority
+    origin_scheme = parsed.scheme.lower()
+    return (
+        origin_scheme,
+        origin_host,
+        origin_port or DEFAULT_PORTS[origin_scheme],
+    ) == (
+        request_scheme,
+        request_host,
+        request_port or DEFAULT_PORTS[request_scheme],
+    )
 
 
 def create_app(
@@ -131,16 +152,31 @@ def create_app(
     app.state.start_worker = start_worker
     app.state.database = database
 
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_without_raw_inputs(
+        _request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        errors = [
+            {key: value for key, value in error.items() if key != "input"} for error in exc.errors()
+        ]
+        return JSONResponse(
+            status_code=422,
+            content={"detail": jsonable_encoder(errors)},
+        )
+
     @app.middleware("http")
     async def require_same_origin_for_api_mutations(request: Request, call_next):
         origins = request.headers.getlist("origin")
+        hosts = request.headers.getlist("host")
         if (
             request.url.path.startswith("/api/")
             and request.method in STATE_CHANGING_METHODS
             and origins
             and (
                 len(origins) != 1
-                or not _origin_matches_host(origins[0], request.headers.get("host"))
+                or len(hosts) != 1
+                or not _origin_matches_request(origins[0], hosts[0], request.url.scheme)
             )
         ):
             return JSONResponse(

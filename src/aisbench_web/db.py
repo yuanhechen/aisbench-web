@@ -12,7 +12,8 @@ MIGRATION_1 = (
     """
     CREATE TABLE users (
       id TEXT PRIMARY KEY,
-      username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+      username TEXT NOT NULL,
+      username_key TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       created_at TEXT NOT NULL,
       last_login_at TEXT
@@ -28,6 +29,7 @@ MIGRATION_1 = (
     )
     """,
     "CREATE INDEX sessions_user_id_idx ON sessions(user_id)",
+    "CREATE INDEX sessions_expires_at_idx ON sessions(expires_at)",
     """
     CREATE TABLE model_endpoints (
       id TEXT PRIMARY KEY,
@@ -171,9 +173,7 @@ class Database:
                 continue
 
             if journal_mode != "wal":
-                raise RuntimeError(
-                    f"Expected SQLite journal mode 'wal', received {journal_mode!r}"
-                )
+                raise RuntimeError(f"Expected SQLite journal mode 'wal', received {journal_mode!r}")
             return
 
         raise RuntimeError(

@@ -1,17 +1,19 @@
-import hashlib
 from datetime import datetime, timedelta, timezone
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from aisbench_web.dependencies import get_current_user, get_user_repository
 from aisbench_web.repositories.users import DuplicateUsernameError, User, UserRepository
 from aisbench_web.security import (
+    PASSWORD_MAX_LENGTH,
     SESSION_COOKIE,
     SESSION_DAYS,
+    USERNAME_MAX_LENGTH,
     hash_password,
     new_session_token,
+    session_token_digest,
     verify_password,
 )
 
@@ -22,13 +24,13 @@ _DUMMY_PASSWORD_HASH = hash_password("dummy password used only for login timing"
 
 
 class RegistrationRequest(BaseModel):
-    username: str = Field(min_length=1)
-    password: str = Field(min_length=8)
+    username: str = Field(min_length=1, max_length=USERNAME_MAX_LENGTH)
+    password: SecretStr
 
 
 class LoginRequest(BaseModel):
-    username: str
-    password: str
+    username: str = Field(max_length=USERNAME_MAX_LENGTH)
+    password: SecretStr
 
 
 class UserResponse(BaseModel):
@@ -45,6 +47,28 @@ class UserResponse(BaseModel):
             created_at=user.created_at,
             last_login_at=user.last_login_at,
         )
+
+
+def _validated_password(password: SecretStr, *, minimum_length: int = 0) -> str:
+    value = password.get_secret_value()
+    if len(value) < minimum_length:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"password must contain at least {minimum_length} characters",
+        )
+    if len(value) > PASSWORD_MAX_LENGTH:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail=f"password must contain at most {PASSWORD_MAX_LENGTH} characters",
+        )
+    try:
+        value.encode("utf-8")
+    except UnicodeEncodeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="password must be valid UTF-8 text",
+        ) from exc
+    return value
 
 
 def _set_session_cookie(
@@ -76,7 +100,8 @@ def register(
     response: Response,
     repository: RepositoryDependency,
 ) -> UserResponse:
-    password_hash = hash_password(payload.password)
+    password = _validated_password(payload.password, minimum_length=8)
+    password_hash = hash_password(password)
     token, token_hash = new_session_token()
     now = datetime.now(timezone.utc)
     try:
@@ -102,11 +127,12 @@ def login(
     response: Response,
     repository: RepositoryDependency,
 ) -> UserResponse:
+    password = _validated_password(payload.password)
     credentials = repository.get_credentials_by_username(payload.username)
     encoded_password = (
         credentials.password_hash if credentials is not None else _DUMMY_PASSWORD_HASH
     )
-    password_is_valid = verify_password(encoded_password, payload.password)
+    password_is_valid = verify_password(encoded_password, password)
     if credentials is None or not password_is_valid:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -128,7 +154,7 @@ def login(
 def logout(request: Request, repository: RepositoryDependency) -> Response:
     token = request.cookies.get(SESSION_COOKIE)
     if token:
-        token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
+        token_hash = session_token_digest(token)
         repository.revoke_session(token_hash)
 
     response = Response(status_code=status.HTTP_204_NO_CONTENT)

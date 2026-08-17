@@ -113,9 +113,7 @@ def test_migrate_creates_schema_and_wal(tmp_path):
     with database.connect() as connection:
         tables = {
             row[0]
-            for row in connection.execute(
-                "SELECT name FROM sqlite_master WHERE type='table'"
-            )
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type='table'")
         }
         journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
     assert journal_mode == "wal"
@@ -163,9 +161,7 @@ def test_migration_creates_required_column_shapes(tmp_path):
         dataset_columns = {
             row["name"]: row for row in connection.execute("PRAGMA table_info(datasets)")
         }
-        job_columns = {
-            row["name"]: row for row in connection.execute("PRAGMA table_info(jobs)")
-        }
+        job_columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(jobs)")}
 
     assert (
         endpoint_columns["encrypted_api_key"]["type"],
@@ -188,6 +184,28 @@ def test_migration_creates_required_column_shapes(tmp_path):
         job_columns["model_snapshot_json"]["type"],
         job_columns["model_snapshot_json"]["notnull"],
     ) == ("TEXT", 1)
+
+
+def test_users_schema_has_one_unique_persisted_username_key(tmp_path):
+    database = Database(tmp_path / "app.db")
+    database.migrate()
+
+    with database.connect() as connection:
+        user_columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(users)")}
+        unique_application_indexes = {
+            tuple(
+                column["name"]
+                for column in connection.execute(f"PRAGMA index_info({index['name']})")
+            )
+            for index in connection.execute("PRAGMA index_list(users)")
+            if index["unique"] and index["origin"] == "u"
+        }
+
+    assert (user_columns["username_key"]["type"], user_columns["username_key"]["notnull"]) == (
+        "TEXT",
+        1,
+    )
+    assert unique_application_indexes == {("username_key",)}
 
 
 def test_migration_creates_required_foreign_key_actions(tmp_path):
@@ -222,6 +240,7 @@ def test_migration_creates_required_explicit_indexes(tmp_path):
 
     expected_columns = {
         "sessions_user_id_idx": ("user_id",),
+        "sessions_expires_at_idx": ("expires_at",),
         "jobs_queue_idx": ("status", "created_at", "id"),
         "jobs_owner_idx": ("owner_id", "created_at"),
         "jobs_model_endpoint_id_idx": ("model_endpoint_id",),
@@ -236,10 +255,7 @@ def test_migration_creates_required_explicit_indexes(tmp_path):
             )
         }
         actual_columns = {
-            name: tuple(
-                row["name"]
-                for row in connection.execute(f"PRAGMA index_info({name})")
-            )
+            name: tuple(row["name"] for row in connection.execute(f"PRAGMA index_info({name})"))
             for name in expected_columns
         }
         owner_index = [
@@ -247,10 +263,18 @@ def test_migration_creates_required_explicit_indexes(tmp_path):
             for row in connection.execute("PRAGMA index_xinfo(jobs_owner_idx)")
             if row["key"]
         ]
+        expiry_query_plan = [
+            row["detail"]
+            for row in connection.execute(
+                "EXPLAIN QUERY PLAN SELECT id FROM sessions WHERE expires_at <= ?",
+                ("2026-01-01T00:00:00+00:00",),
+            )
+        ]
 
     assert explicit_indexes == set(expected_columns)
     assert actual_columns == expected_columns
     assert owner_index == [("owner_id", 0), ("created_at", 1)]
+    assert any("sessions_expires_at_idx" in detail for detail in expiry_query_plan)
 
 
 def test_foreign_keys_restrict_referenced_parents_and_cascade_owned_rows(tmp_path):
@@ -259,7 +283,10 @@ def test_foreign_keys_restrict_referenced_parents_and_cascade_owned_rows(tmp_pat
 
     with database.connect() as connection:
         connection.execute(
-            "INSERT INTO users VALUES ('user-1', 'alice', 'hash', 'created', NULL)"
+            """
+            INSERT INTO users
+            VALUES ('user-1', 'alice', 'alice', 'hash', 'created', NULL)
+            """
         )
         connection.execute(
             """
@@ -297,9 +324,7 @@ def test_foreign_keys_restrict_referenced_parents_and_cascade_owned_rows(tmp_pat
             )
             """
         )
-        connection.execute(
-            "INSERT INTO job_metrics VALUES ('job-1', 'accuracy', 1.0, NULL, NULL)"
-        )
+        connection.execute("INSERT INTO job_metrics VALUES ('job-1', 'accuracy', 1.0, NULL, NULL)")
         connection.execute(
             "INSERT INTO artifacts VALUES ('artifact-1', 'job-1', 'log', 'log.txt', 'text/plain', 'created')"
         )
@@ -331,15 +356,13 @@ def test_successful_connection_context_commits(tmp_path):
     with database.connect() as connection:
         connection.execute(
             """
-            INSERT INTO users (id, username, password_hash, created_at)
-            VALUES ('user-1', 'alice', 'hash', '2026-08-17T00:00:00+00:00')
+            INSERT INTO users (id, username, username_key, password_hash, created_at)
+            VALUES ('user-1', 'alice', 'alice', 'hash', '2026-08-17T00:00:00+00:00')
             """
         )
 
     with database.connect() as connection:
-        user = connection.execute(
-            "SELECT username FROM users WHERE id = 'user-1'"
-        ).fetchone()
+        user = connection.execute("SELECT username FROM users WHERE id = 'user-1'").fetchone()
     assert user["username"] == "alice"
 
 
@@ -353,16 +376,14 @@ def test_connection_context_rolls_back_on_exception(tmp_path):
     ):
         connection.execute(
             """
-            INSERT INTO users (id, username, password_hash, created_at)
-            VALUES ('user-1', 'alice', 'hash', '2026-08-17T00:00:00+00:00')
+            INSERT INTO users (id, username, username_key, password_hash, created_at)
+            VALUES ('user-1', 'alice', 'alice', 'hash', '2026-08-17T00:00:00+00:00')
             """
         )
         raise RuntimeError("stop transaction")
 
     with database.connect() as connection:
-        count = connection.execute(
-            "SELECT COUNT(*) FROM users WHERE id = 'user-1'"
-        ).fetchone()[0]
+        count = connection.execute("SELECT COUNT(*) FROM users WHERE id = 'user-1'").fetchone()[0]
     assert count == 0
 
 
@@ -392,8 +413,6 @@ async def test_fastapi_lifespan_migrates_database_before_service_use(tmp_path):
 
     async with app.router.lifespan_context(app):
         with app.state.database.connect() as connection:
-            migration = connection.execute(
-                "SELECT version FROM schema_migrations"
-            ).fetchone()
+            migration = connection.execute("SELECT version FROM schema_migrations").fetchone()
 
     assert migration["version"] == 1
