@@ -13,6 +13,7 @@ def test_discover_ais_bench_prefers_current_environment(tmp_path, monkeypatch):
     executable.parent.mkdir()
     executable.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     executable.chmod(0o755)
+    monkeypatch.delenv("AISBENCH_WEB_AIS_BENCH_PATH", raising=False)
     monkeypatch.setenv("PATH", str(executable.parent))
     assert discover_ais_bench() == executable
 

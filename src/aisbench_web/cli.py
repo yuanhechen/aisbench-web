@@ -1,4 +1,5 @@
 import argparse
+import ipaddress
 import logging
 import subprocess
 from collections.abc import Sequence
@@ -11,7 +12,16 @@ from aisbench_web.app import create_app
 from aisbench_web.settings import Settings, discover_ais_bench
 
 logger = logging.getLogger(__name__)
-LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+PROBE_DIAGNOSTIC_LIMIT = 500
+
+
+def _is_loopback_host(host: str) -> bool:
+    if host.casefold() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -42,20 +52,39 @@ def main() -> None:
             text=True,
             timeout=15,
         )
-    except (OSError, subprocess.SubprocessError) as exc:
+    except subprocess.CalledProcessError as exc:
+        stderr = exc.stderr.strip() if exc.stderr else ""
+        stdout = exc.stdout.strip() if exc.stdout else ""
+        diagnostic = stderr or stdout
+        if len(diagnostic) > PROBE_DIAGNOSTIC_LIMIT:
+            diagnostic = f"{diagnostic[:PROBE_DIAGNOSTIC_LIMIT]}…"
+        detail = f": {diagnostic}" if diagnostic else ""
         raise RuntimeError(
-            f"Failed to probe AISBench executable at {settings.ais_bench_path}: {exc}"
+            f"AISBench probe exited with status {exc.returncode}{detail}"
+        ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(
+            f"AISBench probe timed out after {exc.timeout} seconds at {settings.ais_bench_path}"
+        ) from exc
+    except OSError as exc:
+        raise RuntimeError(
+            f"Could not launch AISBench executable at {settings.ais_bench_path}: {exc}"
         ) from exc
 
     logger.info("Using AISBench executable: %s", settings.ais_bench_path)
     try:
         ais_bench_version = metadata.version("ais_bench_benchmark")
     except metadata.PackageNotFoundError:
-        logger.warning("AISBench package version is unknown")
+        logger.warning(
+            "AISBench package version in the aisbench-web Python environment is unknown"
+        )
     else:
-        logger.info("AISBench package version: %s", ais_bench_version)
+        logger.info(
+            "AISBench package version in the aisbench-web Python environment: %s",
+            ais_bench_version,
+        )
 
-    if args.host.lower() not in LOOPBACK_HOSTS:
+    if not _is_loopback_host(args.host):
         logger.warning(
             "Listening on non-loopback host %s; only expose AISBench Web on a trusted network",
             args.host,

@@ -88,10 +88,13 @@ def test_main_runs_uvicorn_with_runtime_configuration(tmp_path, monkeypatch, cap
     assert app.state.settings.max_concurrent_jobs == 3
     assert app.state.start_worker is True
     assert str(executable) in caplog.text
-    assert "1.2.3" in caplog.text
+    assert (
+        "AISBench package version in the aisbench-web Python environment: 1.2.3"
+        in caplog.text
+    )
 
 
-def test_main_aborts_clearly_when_probe_fails(tmp_path, monkeypatch):
+def test_main_reports_probe_timeout_distinctly(tmp_path, monkeypatch):
     executable = (tmp_path / "ais_bench").resolve()
     monkeypatch.setattr(
         sys,
@@ -110,7 +113,79 @@ def test_main_aborts_clearly_when_probe_fails(tmp_path, monkeypatch):
         lambda *args, **kwargs: pytest.fail("Uvicorn must not start after a failed probe"),
     )
 
-    with pytest.raises(RuntimeError, match="Failed to probe AISBench executable"):
+    with pytest.raises(RuntimeError, match="AISBench probe timed out after 15 seconds"):
+        cli.main()
+
+
+def test_main_reports_probe_launch_failure_distinctly(tmp_path, monkeypatch):
+    executable = (tmp_path / "ais_bench").resolve()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aisbench-web", "--data-dir", str(tmp_path), "--host", "localhost"],
+    )
+    monkeypatch.setattr(cli, "discover_ais_bench", lambda: executable)
+
+    def fail_probe(command, **kwargs):
+        raise OSError("bad executable format")
+
+    monkeypatch.setattr(cli.subprocess, "run", fail_probe)
+
+    with pytest.raises(RuntimeError, match="Could not launch AISBench executable"):
+        cli.main()
+
+
+def test_main_surfaces_bounded_probe_stderr(tmp_path, monkeypatch):
+    executable = (tmp_path / "ais_bench").resolve()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aisbench-web", "--data-dir", str(tmp_path), "--host", "localhost"],
+    )
+    monkeypatch.setattr(cli, "discover_ais_bench", lambda: executable)
+    diagnostic = "invalid benchmark arguments: " + ("detail " * 2_000) + "UNBOUNDED_TAIL"
+
+    def fail_probe(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            returncode=2,
+            cmd=command,
+            output="stdout must not replace stderr",
+            stderr=f"  {diagnostic}  \n",
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", fail_probe)
+
+    with pytest.raises(RuntimeError) as exc_info:
+        cli.main()
+
+    message = str(exc_info.value)
+    assert "AISBench probe exited with status 2" in message
+    assert "invalid benchmark arguments" in message
+    assert "stdout must not replace stderr" not in message
+    assert "UNBOUNDED_TAIL" not in message
+    assert len(message) < 1_000
+
+
+def test_main_uses_probe_stdout_when_stderr_is_blank(tmp_path, monkeypatch):
+    executable = (tmp_path / "ais_bench").resolve()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aisbench-web", "--data-dir", str(tmp_path), "--host", "localhost"],
+    )
+    monkeypatch.setattr(cli, "discover_ais_bench", lambda: executable)
+
+    def fail_probe(command, **kwargs):
+        raise subprocess.CalledProcessError(
+            returncode=2,
+            cmd=command,
+            output="  stdout diagnostic  \n",
+            stderr=" \n",
+        )
+
+    monkeypatch.setattr(cli.subprocess, "run", fail_probe)
+
+    with pytest.raises(RuntimeError, match="stdout diagnostic"):
         cli.main()
 
 
@@ -139,13 +214,21 @@ def test_main_warns_when_aisbench_version_is_unknown(tmp_path, monkeypatch, capl
 
     cli.main()
 
-    assert "AISBench package version is unknown" in caplog.text
+    assert (
+        "AISBench package version in the aisbench-web Python environment is unknown"
+        in caplog.text
+    )
     assert "app" in run_call
 
 
-def test_main_warns_when_listening_beyond_loopback(tmp_path, monkeypatch, caplog):
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.0.2.10"])
+def test_main_warns_when_listening_beyond_loopback(tmp_path, monkeypatch, caplog, host):
     executable = (tmp_path / "ais_bench").resolve()
-    monkeypatch.setattr(sys, "argv", ["aisbench-web", "--data-dir", str(tmp_path)])
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aisbench-web", "--data-dir", str(tmp_path), "--host", host],
+    )
     monkeypatch.setattr(cli, "discover_ais_bench", lambda: executable)
     monkeypatch.setattr(
         cli.subprocess,
@@ -159,3 +242,26 @@ def test_main_warns_when_listening_beyond_loopback(tmp_path, monkeypatch, caplog
     cli.main()
 
     assert "trusted network" in caplog.text
+
+
+@pytest.mark.parametrize("host", ["127.0.0.2", "::1", "LOCALHOST"])
+def test_main_does_not_warn_for_loopback_host(tmp_path, monkeypatch, caplog, host):
+    executable = (tmp_path / "ais_bench").resolve()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["aisbench-web", "--data-dir", str(tmp_path), "--host", host],
+    )
+    monkeypatch.setattr(cli, "discover_ais_bench", lambda: executable)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 0),
+    )
+    monkeypatch.setattr(cli.metadata, "version", lambda package_name: "1.2.3")
+    monkeypatch.setattr(cli.uvicorn, "run", lambda app, **kwargs: None)
+    caplog.set_level(logging.WARNING)
+
+    cli.main()
+
+    assert "trusted network" not in caplog.text
