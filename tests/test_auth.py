@@ -353,6 +353,142 @@ async def test_post_origin_must_be_well_formed_and_match_request_authority(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://testserver?",
+        "http://testserver#",
+        "http://testserver/path",
+        "http://user@testserver",
+        "http://testserver,https://attacker.example",
+    ],
+)
+async def test_serialized_origin_must_contain_only_one_authority(
+    origin: str,
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password one"},
+        headers={"Origin": origin},
+    )
+
+    assert response.status_code == 403
+    with auth_app.state.database.connect() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "origins",
+    [
+        ["http://testserver", "http://testserver"],
+        ["http://testserver", "https://attacker.example"],
+    ],
+)
+async def test_duplicate_origin_header_fields_are_rejected(
+    origins: list[str],
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password one"},
+        headers=[("Origin", origin) for origin in origins],
+    )
+
+    assert response.status_code == 403
+    with auth_app.state.database.connect() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("origin", "host"),
+    [
+        (b"\x00http://testserver", b"testserver"),
+        (b"http://\xdf", b"ss"),
+        (b"http://testserver%", b"testserver%"),
+        (b"http://testserver%GG", b"testserver%GG"),
+        (b"http://testserver:", b"testserver:"),
+        (b"http://testserver:not-a-port", b"testserver:not-a-port"),
+        (b"http://testserver:65536", b"testserver:65536"),
+        (b"http://[::1", b"[::1"),
+        (b"http://[::1]extra", b"[::1]extra"),
+        (b"http://[fe80::1%eth\\0]", b"[fe80::1%eth\\0]"),
+    ],
+)
+async def test_origin_serialization_rejects_malformed_authorities(
+    origin: bytes,
+    host: bytes,
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password one"},
+        headers=[(b"Origin", origin), (b"Host", host)],
+    )
+
+    assert response.status_code == 403
+    with auth_app.state.database.connect() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert count == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("base_url", "origin"),
+    [
+        ("http://example.test:8443", "HTTP://EXAMPLE.TEST:8443"),
+        ("http://127.0.0.1:8123", "http://127.0.0.1:8123"),
+        ("http://[::1]:8123", "HTTP://[::1]:8123"),
+    ],
+)
+async def test_origin_validation_preserves_valid_authorities(
+    base_url: str,
+    origin: str,
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    transport = httpx.ASGITransport(app=auth_app)
+    async with httpx.AsyncClient(transport=transport, base_url=base_url) as authority_client:
+        response = await authority_client.post(
+            "/api/auth/register",
+            json={"username": "alice", "password": "password one"},
+            headers={"Origin": origin},
+        )
+
+    assert response.status_code == 201
+    with auth_app.state.database.connect() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert count == 1
+
+
+@pytest.mark.asyncio
+async def test_origin_validation_rejects_overlong_host_port_without_error(
+    auth_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    response = await client.post(
+        "/api/auth/register",
+        json={"username": "alice", "password": "password one"},
+        headers=[
+            (b"Origin", b"http://testserver"),
+            (b"Host", b"testserver:" + b"9" * 5_000),
+        ],
+    )
+
+    assert response.status_code == 403
+    with auth_app.state.database.connect() as connection:
+        count = connection.execute("SELECT COUNT(*) FROM users").fetchone()[0]
+    assert count == 0
+
+
+@pytest.mark.asyncio
 async def test_get_api_is_not_subject_to_origin_check(client: httpx.AsyncClient) -> None:
     response = await client.get(
         "/api/me",
