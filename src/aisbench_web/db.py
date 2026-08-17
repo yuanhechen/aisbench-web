@@ -1,8 +1,12 @@
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
+
+WAL_ACTIVATION_ATTEMPTS = 3
+WAL_RETRY_BASE_DELAY_SECONDS = 0.01
 
 MIGRATION_1 = (
     """
@@ -23,6 +27,7 @@ MIGRATION_1 = (
       expires_at TEXT NOT NULL
     )
     """,
+    "CREATE INDEX sessions_user_id_idx ON sessions(user_id)",
     """
     CREATE TABLE model_endpoints (
       id TEXT PRIMARY KEY,
@@ -81,6 +86,8 @@ MIGRATION_1 = (
     """,
     "CREATE INDEX jobs_queue_idx ON jobs(status, created_at, id)",
     "CREATE INDEX jobs_owner_idx ON jobs(owner_id, created_at DESC)",
+    "CREATE INDEX jobs_model_endpoint_id_idx ON jobs(model_endpoint_id)",
+    "CREATE INDEX jobs_dataset_id_idx ON jobs(dataset_id)",
     """
     CREATE TABLE job_metrics (
       job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
@@ -101,6 +108,7 @@ MIGRATION_1 = (
       created_at TEXT NOT NULL
     )
     """,
+    "CREATE INDEX artifacts_job_id_idx ON artifacts(job_id)",
 )
 
 
@@ -126,7 +134,7 @@ class Database:
 
     def migrate(self) -> None:
         with self.connect() as connection:
-            connection.execute("PRAGMA journal_mode=WAL")
+            self._enable_wal(connection)
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
@@ -148,3 +156,27 @@ class Database:
                 "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
                 (1, datetime.now(timezone.utc).isoformat()),
             )
+
+    def _enable_wal(self, connection: sqlite3.Connection) -> None:
+        last_error = None
+        for attempt in range(1, WAL_ACTIVATION_ATTEMPTS + 1):
+            try:
+                journal_mode = connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).casefold():
+                    raise
+                last_error = exc
+                if attempt < WAL_ACTIVATION_ATTEMPTS:
+                    time.sleep(WAL_RETRY_BASE_DELAY_SECONDS * 2 ** (attempt - 1))
+                continue
+
+            if journal_mode != "wal":
+                raise RuntimeError(
+                    f"Expected SQLite journal mode 'wal', received {journal_mode!r}"
+                )
+            return
+
+        raise RuntimeError(
+            "Could not enable SQLite WAL mode "
+            f"after {WAL_ACTIVATION_ATTEMPTS} attempts: {last_error}"
+        ) from last_error
