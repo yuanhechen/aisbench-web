@@ -1,10 +1,17 @@
 import argparse
+import logging
+import subprocess
 from collections.abc import Sequence
+from importlib import metadata
 from pathlib import Path
 
 import uvicorn
 
 from aisbench_web.app import create_app
+from aisbench_web.settings import Settings, discover_ais_bench
+
+logger = logging.getLogger(__name__)
+LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -17,10 +24,42 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO)
     args = parse_args()
-    app = create_app(
+    ais_bench_path = discover_ais_bench()
+    settings = Settings.create(
         data_dir=args.data_dir,
+        ais_bench_path=ais_bench_path,
         max_concurrent_jobs=args.max_concurrent_jobs,
-        start_worker=True,
     )
+    settings.ensure_layout()
+
+    try:
+        subprocess.run(
+            [str(settings.ais_bench_path), "--help"],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(
+            f"Failed to probe AISBench executable at {settings.ais_bench_path}: {exc}"
+        ) from exc
+
+    logger.info("Using AISBench executable: %s", settings.ais_bench_path)
+    try:
+        ais_bench_version = metadata.version("ais_bench_benchmark")
+    except metadata.PackageNotFoundError:
+        logger.warning("AISBench package version is unknown")
+    else:
+        logger.info("AISBench package version: %s", ais_bench_version)
+
+    if args.host.lower() not in LOOPBACK_HOSTS:
+        logger.warning(
+            "Listening on non-loopback host %s; only expose AISBench Web on a trusted network",
+            args.host,
+        )
+
+    app = create_app(settings=settings, start_worker=True)
     uvicorn.run(app, host=args.host, port=args.port)
