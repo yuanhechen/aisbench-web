@@ -77,7 +77,12 @@ def test_main_runs_uvicorn_with_runtime_configuration(tmp_path, monkeypatch, cap
     cli.main()
 
     assert probe_call["command"] == [str(executable), "--help"]
-    assert probe_call["kwargs"]["timeout"] == 15
+    assert probe_call["kwargs"] == {
+        "check": True,
+        "capture_output": True,
+        "text": True,
+        "timeout": 15,
+    }
     assert version_call["package_name"] == "ais_bench_benchmark"
     assert run_call["host"] == "127.0.0.1"
     assert run_call["port"] == 9001
@@ -143,7 +148,13 @@ def test_main_surfaces_bounded_probe_stderr(tmp_path, monkeypatch):
         ["aisbench-web", "--data-dir", str(tmp_path), "--host", "localhost"],
     )
     monkeypatch.setattr(cli, "discover_ais_bench", lambda: executable)
-    diagnostic = "invalid benchmark arguments: " + ("detail " * 2_000) + "UNBOUNDED_TAIL"
+    diagnostic = (
+        "invalid benchmark arguments: "
+        + ("leading detail " * 1_000)
+        + "MIDDLE_MUST_BE_OMITTED"
+        + ("trailing detail " * 1_000)
+        + "ROOT_CAUSE: ImportError: missing benchmark package"
+    )
 
     def fail_probe(command, **kwargs):
         raise subprocess.CalledProcessError(
@@ -160,10 +171,14 @@ def test_main_surfaces_bounded_probe_stderr(tmp_path, monkeypatch):
 
     message = str(exc_info.value)
     assert "AISBench probe exited with status 2" in message
+    assert str(executable) in message
     assert "invalid benchmark arguments" in message
+    assert "diagnostic output omitted" in message
+    assert "ROOT_CAUSE: ImportError: missing benchmark package" in message
+    assert "MIDDLE_MUST_BE_OMITTED" not in message
     assert "stdout must not replace stderr" not in message
-    assert "UNBOUNDED_TAIL" not in message
-    assert len(message) < 1_000
+    excerpt = message.split(f"{executable}: ", maxsplit=1)[1]
+    assert len(excerpt) <= 500
 
 
 def test_main_uses_probe_stdout_when_stderr_is_blank(tmp_path, monkeypatch):
@@ -221,7 +236,7 @@ def test_main_warns_when_aisbench_version_is_unknown(tmp_path, monkeypatch, capl
     assert "app" in run_call
 
 
-@pytest.mark.parametrize("host", ["0.0.0.0", "192.0.2.10"])
+@pytest.mark.parametrize("host", ["0.0.0.0", "192.0.2.10", "example.test"])
 def test_main_warns_when_listening_beyond_loopback(tmp_path, monkeypatch, caplog, host):
     executable = (tmp_path / "ais_bench").resolve()
     monkeypatch.setattr(

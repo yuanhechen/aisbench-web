@@ -13,6 +13,7 @@ from aisbench_web.settings import Settings, discover_ais_bench
 
 logger = logging.getLogger(__name__)
 PROBE_DIAGNOSTIC_LIMIT = 500
+PROBE_DIAGNOSTIC_OMISSION = "\n... diagnostic output omitted ...\n"
 
 
 def _is_loopback_host(host: str) -> bool:
@@ -57,10 +58,18 @@ def main() -> None:
         stdout = exc.stdout.strip() if exc.stdout else ""
         diagnostic = stderr or stdout
         if len(diagnostic) > PROBE_DIAGNOSTIC_LIMIT:
-            diagnostic = f"{diagnostic[:PROBE_DIAGNOSTIC_LIMIT]}…"
+            retained = PROBE_DIAGNOSTIC_LIMIT - len(PROBE_DIAGNOSTIC_OMISSION)
+            beginning_length = retained // 2
+            ending_length = retained - beginning_length
+            diagnostic = (
+                diagnostic[:beginning_length]
+                + PROBE_DIAGNOSTIC_OMISSION
+                + diagnostic[-ending_length:]
+            )
         detail = f": {diagnostic}" if diagnostic else ""
         raise RuntimeError(
-            f"AISBench probe exited with status {exc.returncode}{detail}"
+            f"AISBench probe exited with status {exc.returncode} "
+            f"at {settings.ais_bench_path}{detail}"
         ) from exc
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
