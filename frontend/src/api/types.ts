@@ -34,6 +34,7 @@ export interface Job {
   mode: string;
   status: string;
   queue_position: number | null;
+  progress: { completed: number; total: number } | null;
   model: { name: string; model_name: string; base_url: string };
   dataset: { id: string; name: string };
   parameters: Record<string, unknown>;

@@ -78,6 +78,20 @@ async def test_create_job_uses_current_user_and_returns_queue_position(owner) ->
 
 
 @pytest.mark.asyncio
+async def test_detail_reports_persisted_progress_without_a_socket(owner) -> None:
+    job_id = (await submit(owner)).json()["id"]
+
+    assert (await owner.client.get(f"/api/jobs/{job_id}")).json()["progress"] is None
+
+    owner.jobs.record_progress(job_id, 5, 8)
+
+    assert (await owner.client.get(f"/api/jobs/{job_id}")).json()["progress"] == {
+        "completed": 5,
+        "total": 8,
+    }
+
+
+@pytest.mark.asyncio
 async def test_created_job_keeps_display_snapshots_when_the_endpoint_changes(owner) -> None:
     job_id = (await submit(owner)).json()["id"]
 

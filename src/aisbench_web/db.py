@@ -147,7 +147,14 @@ MIGRATION_2_TRIGGERS = (
     """,
 )
 
-LATEST_SCHEMA_VERSION = 2
+# Progress is shown on a page that can be refreshed at any moment, so it has to survive
+# outside the WebSocket that reports it live.
+MIGRATION_3 = (
+    "ALTER TABLE jobs ADD COLUMN progress_completed INTEGER",
+    "ALTER TABLE jobs ADD COLUMN progress_total INTEGER",
+)
+
+LATEST_SCHEMA_VERSION = 3
 
 
 class Database:
@@ -199,7 +206,11 @@ class Database:
                     f"(maximum {LATEST_SCHEMA_VERSION}); upgrade aisbench-web"
                 )
 
-            migrations = ((1, self._apply_migration_1), (2, self._apply_migration_2))
+            migrations = (
+                (1, self._apply_migration_1),
+                (2, self._apply_migration_2),
+                (3, self._apply_migration_3),
+            )
             pending = [(version, apply) for version, apply in migrations if version not in applied]
             if not pending:
                 return
@@ -221,6 +232,11 @@ class Database:
     @staticmethod
     def _apply_migration_1(connection: sqlite3.Connection) -> None:
         for statement in MIGRATION_1:
+            connection.execute(statement)
+
+    @staticmethod
+    def _apply_migration_3(connection: sqlite3.Connection) -> None:
+        for statement in MIGRATION_3:
             connection.execute(statement)
 
     @staticmethod

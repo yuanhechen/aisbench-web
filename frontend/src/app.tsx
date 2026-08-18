@@ -22,6 +22,7 @@ import type { MessageKey } from "./i18n/messages";
 import { AuthPage } from "./pages/auth-page";
 import { ComparisonPage } from "./pages/comparison-page";
 import { DatasetsPage } from "./pages/datasets-page";
+import { JobDetailRoute } from "./pages/job-detail-route";
 import { JobsPage } from "./pages/jobs-page";
 import { ModelsPage } from "./pages/models-page";
 import { NewJobPage } from "./pages/new-job-page";
@@ -130,7 +131,7 @@ function Shell({ user, recentJobs }: { user: CurrentUser; recentJobs: RecentJob[
           <Route path="/" element={<Navigate to="/jobs/new" replace />} />
           <Route path="/jobs/new" element={<NewJobPage />} />
           <Route path="/jobs" element={<JobsPage />} />
-          <Route path="/jobs/:jobId" element={<JobsPage />} />
+          <Route path="/jobs/:jobId" element={<JobDetailRoute />} />
           <Route path="/comparison" element={<ComparisonPage />} />
           <Route path="/models" element={<ModelsPage />} />
           <Route path="/datasets" element={<DatasetsPage />} />

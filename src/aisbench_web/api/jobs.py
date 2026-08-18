@@ -62,11 +62,17 @@ class DatasetDisplay(BaseModel):
     name: str
 
 
+class JobProgress(BaseModel):
+    completed: int
+    total: int
+
+
 class JobResponse(BaseModel):
     id: str
     mode: str
     status: str
     queue_position: int | None
+    progress: JobProgress | None
     model: ModelDisplay
     dataset: DatasetDisplay
     parameters: dict
@@ -110,6 +116,11 @@ def _to_response(job: Job, repository: JobRepository) -> JobResponse:
         status=job.status,
         # 1-based: the user's own job is position 1 when nothing is ahead of it.
         queue_position=None if ahead is None else ahead + 1,
+        progress=(
+            None
+            if job.progress_total is None or job.progress_completed is None
+            else JobProgress(completed=job.progress_completed, total=job.progress_total)
+        ),
         model=ModelDisplay(
             name=model.get("name", ""),
             model_name=model.get("model_name", ""),

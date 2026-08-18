@@ -1,0 +1,200 @@
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { http, HttpResponse } from "msw";
+import { beforeEach, describe, expect, it } from "vitest";
+
+import { App } from "../app";
+import { I18nProvider } from "../i18n/i18n-context";
+import { AuthProvider } from "../auth/auth-context";
+import { installFakeWebSocket } from "../test/fake-websocket";
+import { server } from "../test/server";
+import { JobDetailPage } from "./job-detail-page";
+
+const ALICE = { id: "u1", username: "alice" };
+
+const JOB = {
+  id: "job-1",
+  mode: "accuracy",
+  status: "running",
+  queue_position: null,
+  progress: { completed: 512, total: 800 },
+  model: { name: "Qwen3", model_name: "Qwen3-32B", base_url: "http://127.0.0.1:8001/v1" },
+  dataset: { id: "gsm8k", name: "GSM8K" },
+  parameters: { num_prompts: 8 },
+  exit_code: null,
+  error_code: null,
+  error_message: null,
+  created_at: "2026-08-18T12:00:00+00:00",
+  started_at: "2026-08-18T12:00:01+00:00",
+  finished_at: null,
+};
+
+function renderDetail(jobId = "job-1") {
+  return render(
+    <I18nProvider>
+      <AuthProvider initialUser={ALICE}>
+        <JobDetailPage jobId={jobId} />
+      </AuthProvider>
+    </I18nProvider>,
+  );
+}
+
+beforeEach(() => localStorage.clear());
+
+describe("job detail", () => {
+  it("reconnects by fetching log bytes from the last offset", async () => {
+    const requestedOffsets: number[] = [];
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json(JOB)),
+      http.get("/api/jobs/job-1/logs", ({ request }) => {
+        const offset = Number(new URL(request.url).searchParams.get("offset") ?? "0");
+        requestedOffsets.push(offset);
+        return HttpResponse.json({
+          offset: offset === 0 ? 64 : 96,
+          text: offset === 0 ? "startup\n" : "completed request batch\n",
+        });
+      }),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    expect(await screen.findByText("512 / 800")).toBeInTheDocument();
+    await waitFor(() => expect(fake.sockets).toHaveLength(1));
+    fake.sockets[0].open();
+    fake.sockets[0].emitJson({ type: "log", offset: 120 });
+
+    await waitFor(() => expect(requestedOffsets).toContain(64));
+    expect(await screen.findByText(/completed request batch/)).toBeInTheDocument();
+    // The first chunk is never refetched, so nothing is duplicated in the view.
+    expect(screen.getByText(/startup/).textContent?.match(/startup/g)).toHaveLength(1);
+    fake.restore();
+  });
+
+  it("restores everything from REST without any socket event", async () => {
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json(JOB)),
+      http.get("/api/jobs/job-1/logs", () =>
+        HttpResponse.json({ offset: 20, text: "restored line\n" }),
+      ),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    expect(await screen.findByText("512 / 800")).toBeInTheDocument();
+    expect(await screen.findByText(/restored line/)).toBeInTheDocument();
+    expect(screen.getByText("运行中")).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("shows queue position and how many jobs are ahead", async () => {
+    server.use(
+      http.get("/api/jobs/job-1", () =>
+        HttpResponse.json({ ...JOB, status: "queued", queue_position: 3, progress: null }),
+      ),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    expect(await screen.findByText(/队列位置 3/)).toBeInTheDocument();
+    expect(screen.getByText(/前方任务数 2/)).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("requires one confirmation before stopping a running job", async () => {
+    const user = userEvent.setup();
+    let cancelled = false;
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json(JOB)),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.post("/api/jobs/job-1/cancel", () => {
+        cancelled = true;
+        return HttpResponse.json({ ...JOB, status: "stopping" });
+      }),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    await user.click(await screen.findByRole("button", { name: "停止任务" }));
+    expect(cancelled).toBe(false);
+    await user.click(screen.getByRole("button", { name: "确认停止" }));
+
+    await waitFor(() => expect(cancelled).toBe(true));
+    expect(await screen.findByText("停止中")).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("offers no stop control once the job has finished", async () => {
+    server.use(
+      http.get("/api/jobs/job-1", () =>
+        HttpResponse.json({ ...JOB, status: "succeeded", progress: { completed: 8, total: 8 } }),
+      ),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    expect(await screen.findByText("已成功")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "停止任务" })).not.toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("shows the failure reason a failed job carries", async () => {
+    server.use(
+      http.get("/api/jobs/job-1", () =>
+        HttpResponse.json({
+          ...JOB,
+          status: "failed",
+          error_code: "nonzero_exit",
+          error_message: "AISBench exited with status 3",
+        }),
+      ),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("status 3");
+    fake.restore();
+  });
+});
+
+describe("job list", () => {
+  it("lists only the current user's jobs and filters them", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/jobs", () =>
+        HttpResponse.json([
+          JOB,
+          { ...JOB, id: "job-2", status: "succeeded", dataset: { id: "mmlu", name: "MMLU" } },
+        ]),
+      ),
+    );
+    render(<App initialUser={ALICE} initialPath="/jobs" />);
+
+    expect(await screen.findByRole("link", { name: "GSM8K" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "MMLU" })).toBeInTheDocument();
+
+    await user.selectOptions(screen.getByLabelText("状态筛选"), "succeeded");
+
+    expect(screen.queryByRole("link", { name: "GSM8K" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "MMLU" })).toBeInTheDocument();
+  });
+
+  it("uses a flat table with no metric cards", async () => {
+    server.use(http.get("/api/jobs", () => HttpResponse.json([JOB])));
+    render(<App initialUser={ALICE} initialPath="/jobs" />);
+
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("link", { name: "GSM8K" })).toBeInTheDocument();
+    // Scoped to the table: the same word is also a filter option.
+    expect(within(table).getByText("运行中")).toBeInTheDocument();
+  });
+
+  it("says so plainly when there is nothing to show", async () => {
+    server.use(http.get("/api/jobs", () => HttpResponse.json([])));
+    render(<App initialUser={ALICE} initialPath="/jobs" />);
+
+    expect(await screen.findByText("还没有任务。")).toBeInTheDocument();
+  });
+});

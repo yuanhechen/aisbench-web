@@ -368,6 +368,15 @@ def test_a_successful_run_stores_metrics_and_artifacts(harness: Harness) -> None
     assert artifacts["summary/summary_test.csv"].content_type == "text/csv"
 
 
+def test_progress_is_persisted_so_a_refresh_can_show_it(harness: Harness) -> None:
+    job = harness.queue()
+
+    harness.worker.run_pending_once()
+
+    stored = harness.jobs.get_for_owner(job.id, harness.owner)
+    assert (stored.progress_completed, stored.progress_total) == (8, 8)
+
+
 def test_a_failed_run_stores_no_metrics(harness: Harness) -> None:
     harness.set_scenario("fail")
     job = harness.queue()

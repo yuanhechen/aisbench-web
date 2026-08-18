@@ -21,7 +21,8 @@ UPDATABLE_COLUMNS = ("pid", "exit_code", "error_code", "error_message")
 SELECTED_COLUMNS = (
     "id, owner_id, model_endpoint_id, dataset_id, mode, status, model_snapshot_json, "
     "dataset_snapshot_json, parameters_json, config_path, output_dir, log_path, pid, "
-    "exit_code, error_code, error_message, created_at, started_at, finished_at"
+    "exit_code, error_code, error_message, created_at, started_at, finished_at, "
+    "progress_completed, progress_total"
 )
 
 
@@ -63,6 +64,8 @@ class Job:
     created_at: str
     started_at: str | None
     finished_at: str | None
+    progress_completed: int | None = None
+    progress_total: int | None = None
 
 
 class JobRepository:
@@ -216,6 +219,18 @@ class JobRepository:
                 (artifact_id, job_id, owner_id),
             ).fetchone()
         return None if row is None else StoredArtifact(**dict(row))
+
+    def record_progress(self, job_id: str, completed: int, total: int) -> None:
+        """Persist progress so a page refresh restores it without replaying socket events."""
+        with self.database.connect() as connection:
+            connection.execute(
+                """
+                UPDATE jobs
+                SET progress_completed = ?, progress_total = ?, updated_at = ?
+                WHERE id = ?
+                """,
+                (completed, total, self._now(), job_id),
+            )
 
     def get_for_owner(self, job_id: str, owner_id: str) -> Job | None:
         with self.database.connect() as connection:
@@ -404,4 +419,6 @@ class JobRepository:
             created_at=row["created_at"],
             started_at=row["started_at"],
             finished_at=row["finished_at"],
+            progress_completed=row["progress_completed"],
+            progress_total=row["progress_total"],
         )

@@ -216,15 +216,17 @@ class Worker:
 
     def _publish_progress(self, job_id: str, tail: "_LogTail") -> None:
         """Report only progress the log actually states; unreadable output stays unreported."""
+        latest = None
         for line in tail.new_lines():
             parsed = parse_progress(line)
-            if parsed is None:
-                continue
-            completed, total = parsed
-            self._publish(
-                job_id,
-                {"type": "progress", "completed": completed, "total": total},
-            )
+            if parsed is not None:
+                latest = parsed
+        if latest is None:
+            return
+        completed, total = latest
+        # Persist before publishing: a page refreshed a moment later must see the same number.
+        self.repository.record_progress(job_id, completed, total)
+        self._publish(job_id, {"type": "progress", "completed": completed, "total": total})
 
     def _store_results(self, job: Job, output_dir: Path) -> None:
         parsed = parse_results(job.mode, output_dir)

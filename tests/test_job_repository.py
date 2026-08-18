@@ -301,3 +301,17 @@ def test_transitions_through_the_repository_are_validated(
         job_repository.transition(job.id, JobStatus.RUNNING)
 
     assert job_repository.get_for_owner(job.id, seeded.alice).status == JobStatus.QUEUED
+
+
+def test_progress_survives_for_a_page_refresh(
+    job_repository: JobRepository,
+    seeded: Fixtures,
+) -> None:
+    job = create_job(job_repository, seeded, owner=seeded.alice)
+
+    assert job_repository.get_for_owner(job.id, seeded.alice).progress_completed is None
+
+    job_repository.record_progress(job.id, 5, 8)
+
+    reread = job_repository.get_for_owner(job.id, seeded.alice)
+    assert (reread.progress_completed, reread.progress_total) == (5, 8)

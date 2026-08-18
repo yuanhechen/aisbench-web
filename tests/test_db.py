@@ -94,7 +94,7 @@ def test_concurrent_first_time_migrations_retry_locked_wal(tmp_path, monkeypatch
         versions = connection.execute(
             "SELECT version, COUNT(*) FROM schema_migrations GROUP BY version"
         ).fetchall()
-    assert [tuple(row) for row in versions] == [(1, 1), (2, 1)]
+    assert [tuple(row) for row in versions] == [(1, 1), (2, 1), (3, 1)]
     assert all(connection.was_closed for connection in created_connections)
 
 
@@ -259,7 +259,7 @@ async def test_migration_2_upgrades_legacy_users_and_sessions_atomically(tmp_pat
                 ("user-1",),
             )
 
-    assert [row["version"] for row in versions] == [1, 2]
+    assert [row["version"] for row in versions] == [1, 2, 3]
     assert [row["id"] for row in sessions] != ["expired-session"]
     assert any("sessions_expires_at_idx" in detail for detail in expiry_query_plan)
 
@@ -306,6 +306,7 @@ def test_migration_2_accepts_transient_hardened_version_1_without_duplicate_inde
     tmp_path,
 ):
     database = Database(tmp_path / "transient.db")
+    # A real v1 database always carries every MIGRATION_1 table; only users differs here.
     with database.connect() as connection:
         connection.executescript(
             """
@@ -321,14 +322,14 @@ def test_migration_2_accepts_transient_hardened_version_1_without_duplicate_inde
               created_at TEXT NOT NULL,
               last_login_at TEXT
             );
-            CREATE TABLE sessions (
-              id TEXT PRIMARY KEY,
-              user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-              token_hash TEXT NOT NULL UNIQUE,
-              created_at TEXT NOT NULL,
-              expires_at TEXT NOT NULL
-            );
-            CREATE INDEX sessions_user_id_idx ON sessions(user_id);
+            """
+        )
+        for statement in MIGRATION_1:
+            if "CREATE TABLE users" in statement:
+                continue
+            connection.execute(statement)
+        connection.executescript(
+            """
             CREATE INDEX sessions_expires_at_idx ON sessions(expires_at);
             INSERT INTO schema_migrations VALUES (1, '2026-01-01T00:00:00+00:00');
             INSERT INTO users VALUES (
@@ -348,13 +349,24 @@ def test_migration_2_accepts_transient_hardened_version_1_without_duplicate_inde
             for index in connection.execute("PRAGMA index_list(users)")
             if index["unique"]
             and tuple(
-                row["name"] for row in connection.execute(f"PRAGMA index_info({index['name']})")
+                row["name"]
+                for row in connection.execute(f"PRAGMA index_info({index['name']})")
             )
             == ("username_key",)
         ]
 
-    assert [row["version"] for row in versions] == [1, 2]
+    assert [row["version"] for row in versions] == [1, 2, 3]
     assert len(username_key_indexes) == 1
+
+
+def test_migration_3_adds_progress_columns_and_leaves_existing_jobs_untouched(tmp_path):
+    database = Database(tmp_path / "progress.db")
+    database.migrate()
+
+    with database.connect() as connection:
+        job_columns = {row["name"] for row in connection.execute("PRAGMA table_info(jobs)")}
+
+    assert {"progress_completed", "progress_total"} <= job_columns
 
 
 def test_migrate_rejects_database_from_a_newer_schema_version(tmp_path):
@@ -363,10 +375,10 @@ def test_migrate_rejects_database_from_a_newer_schema_version(tmp_path):
     with database.connect() as connection:
         connection.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            (3, "2026-01-01T00:00:00+00:00"),
+            (4, "2026-01-01T00:00:00+00:00"),
         )
 
-    with pytest.raises(RuntimeError, match=r"newer schema version 3"):
+    with pytest.raises(RuntimeError, match=r"newer schema version 4"):
         database.migrate()
 
 
@@ -410,7 +422,7 @@ def test_migrations_are_idempotent_and_record_version_once(tmp_path):
         applied_versions = connection.execute(
             "SELECT version, COUNT(*) FROM schema_migrations GROUP BY version"
         ).fetchall()
-    assert [tuple(row) for row in applied_versions] == [(1, 1), (2, 1)]
+    assert [tuple(row) for row in applied_versions] == [(1, 1), (2, 1), (3, 1)]
 
 
 def test_migration_creates_required_column_shapes(tmp_path):
