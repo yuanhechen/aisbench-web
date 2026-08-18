@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from aisbench_web.db import Database
+from aisbench_web.jobs.notifier import JobNotifier
 from aisbench_web.jobs.process_runner import ProcessRunner, sanitized_environment
 from aisbench_web.jobs.progress import parse_progress
 from aisbench_web.jobs.states import JobStatus
@@ -28,6 +29,7 @@ class Harness:
     jobs: JobRepository
     settings: Settings
     wrapper: Path
+    database: Database
     owner: str = "user-alice"
 
     def set_scenario(self, scenario: str) -> None:
@@ -126,6 +128,7 @@ def harness(tmp_path: Path, database: Database, settings: Settings) -> Harness:
         jobs=JobRepository(database),
         settings=runnable,
         wrapper=wrapper,
+        database=database,
     )
     harness.set_scenario("success")
     yield harness
@@ -414,3 +417,52 @@ async def test_a_stopped_app_interrupts_the_job_it_was_running(harness: Harness)
         assert harness.jobs.get_for_owner(job.id, harness.owner).status == JobStatus.RUNNING
 
     assert harness.jobs.get_for_owner(job.id, harness.owner).status == JobStatus.INTERRUPTED
+
+
+# --- live notifications -------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_worker_publishes_progress_and_final_status(harness: Harness) -> None:
+    """The worker runs in a thread; events must cross into the serving loop's queues."""
+    notifier = JobNotifier()
+    notifier.bind_loop(asyncio.get_running_loop())
+    worker = Worker(harness.database, harness.settings, notifier=notifier, poll_interval=0.02)
+    job = harness.queue()
+    queue = notifier.subscribe(job.id)
+
+    await asyncio.get_running_loop().run_in_executor(None, worker.run_pending_once)
+    await asyncio.sleep(0.05)  # let call_soon_threadsafe callbacks drain
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    assert {"type": "status", "status": "running"} in events
+    assert any(
+        event["type"] == "progress" and (event["completed"], event["total"]) == (8, 8)
+        for event in events
+    )
+    assert any(
+        event["type"] == "status" and event["status"] == "succeeded" for event in events
+    )
+
+
+@pytest.mark.asyncio
+async def test_no_progress_is_invented_when_the_log_says_nothing(harness: Harness) -> None:
+    harness.set_scenario("fail")
+    notifier = JobNotifier()
+    notifier.bind_loop(asyncio.get_running_loop())
+    worker = Worker(harness.database, harness.settings, notifier=notifier, poll_interval=0.02)
+    job = harness.queue()
+    queue = notifier.subscribe(job.id)
+
+    await asyncio.get_running_loop().run_in_executor(None, worker.run_pending_once)
+    await asyncio.sleep(0.05)
+
+    events = []
+    while not queue.empty():
+        events.append(queue.get_nowait())
+
+    assert not [event for event in events if event["type"] == "progress"]
+    assert any(event.get("status") == "failed" for event in events)

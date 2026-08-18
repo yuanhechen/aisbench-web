@@ -1,3 +1,4 @@
+import asyncio
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from ipaddress import AddressValueError, IPv4Address, IPv6Address
@@ -10,10 +11,12 @@ from starlette.responses import JSONResponse
 
 from aisbench_web.api.auth import router as auth_router
 from aisbench_web.api.datasets import router as datasets_router
+from aisbench_web.api.jobs import router as jobs_router
 from aisbench_web.api.models import router as models_router
 from aisbench_web.api.results import router as results_router
 from aisbench_web.datasets.catalog import CatalogService
 from aisbench_web.db import Database
+from aisbench_web.jobs.notifier import JobNotifier
 from aisbench_web.jobs.worker import Worker, recover_interrupted_jobs
 from aisbench_web.repositories.jobs import JobRepository
 from aisbench_web.settings import Settings
@@ -160,7 +163,10 @@ def create_app(
         executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dataset-install")
         app.state.install_executor = executor
         app.state.install_tasks = []
-        worker = Worker(database, settings) if start_worker else None
+        app.state.notifier.bind_loop(asyncio.get_running_loop())
+        worker = (
+            Worker(database, settings, notifier=app.state.notifier) if start_worker else None
+        )
         app.state.worker = worker
         if worker is not None:
             worker.start()
@@ -180,6 +186,7 @@ def create_app(
     app.state.install_executor = None
     app.state.install_tasks: list[Future] = []
     app.state.worker = None
+    app.state.notifier = JobNotifier()
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_without_raw_inputs(
@@ -222,5 +229,6 @@ def create_app(
     app.include_router(models_router)
     app.include_router(datasets_router)
     app.include_router(results_router)
+    app.include_router(jobs_router)
 
     return app

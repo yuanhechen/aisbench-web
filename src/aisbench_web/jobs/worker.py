@@ -12,7 +12,9 @@ from aisbench_web.jobs.config_generator import (
     generate_config,
     render_config,
 )
+from aisbench_web.jobs.notifier import JobNotifier
 from aisbench_web.jobs.process_runner import ProcessRunner
+from aisbench_web.jobs.progress import parse_progress
 from aisbench_web.jobs.results import index_artifacts, parse_results
 from aisbench_web.jobs.states import JobStatus
 from aisbench_web.repositories.jobs import Job, JobRepository
@@ -44,6 +46,7 @@ class Worker:
         *,
         runner: ProcessRunner | None = None,
         result_parser: ResultParser | None = None,
+        notifier: JobNotifier | None = None,
         poll_interval: float = POLL_INTERVAL_SECONDS,
     ) -> None:
         self.database = database
@@ -51,6 +54,7 @@ class Worker:
         self.repository = JobRepository(database)
         self.runner = runner or ProcessRunner()
         self.result_parser = result_parser or self._store_results
+        self.notifier = notifier
         self.poll_interval = poll_interval
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
@@ -170,6 +174,7 @@ class Worker:
             # PID before RUNNING: a crash between the two must not leave a running job whose
             # process nobody can find.
             self.repository.transition(job.id, JobStatus.RUNNING, pid=process.pid)
+            self._publish(job.id, {"type": "status", "status": JobStatus.RUNNING.value})
             self._await_exit(job, process)
         finally:
             with self._managed_guard:
@@ -178,13 +183,16 @@ class Worker:
 
     def _await_exit(self, job: Job, process) -> None:
         stop_requested = False
+        tail = _LogTail(self.settings.jobs_dir / job.log_path)
         while process.poll() is None:
             if self._stopping.is_set():
                 return
             if not stop_requested and self._stop_requested(job.id):
                 stop_requested = True
                 self.runner.terminate(process, expected_pid=self._recorded_pid(job.id))
+            self._publish_progress(job.id, tail)
             time.sleep(self.poll_interval)
+        self._publish_progress(job.id, tail)
 
         if self._stopping.is_set():
             # The child may exit while stop() is terminating it; stop() records the outcome.
@@ -205,6 +213,18 @@ class Worker:
             error_code="nonzero_exit",
             error_message=f"AISBench exited with status {exit_code}",
         )
+
+    def _publish_progress(self, job_id: str, tail: "_LogTail") -> None:
+        """Report only progress the log actually states; unreadable output stays unreported."""
+        for line in tail.new_lines():
+            parsed = parse_progress(line)
+            if parsed is None:
+                continue
+            completed, total = parsed
+            self._publish(
+                job_id,
+                {"type": "progress", "completed": completed, "total": total},
+            )
 
     def _store_results(self, job: Job, output_dir: Path) -> None:
         parsed = parse_results(job.mode, output_dir)
@@ -307,6 +327,20 @@ class Worker:
             )
         except ValueError:
             logger.warning("Job %s already reached a terminal state", job_id)
+            return
+        self._publish(
+            job_id,
+            {
+                "type": "status",
+                "status": status.value,
+                "exit_code": exit_code,
+                "error_code": error_code,
+            },
+        )
+
+    def _publish(self, job_id: str, event: dict) -> None:
+        if self.notifier is not None:
+            self.notifier.publish_threadsafe(job_id, event)
 
     def _at_capacity(self) -> bool:
         with self._managed_guard:
@@ -325,3 +359,29 @@ class Worker:
             taken = list(self._managed.items())
             self._managed.clear()
         return taken
+
+
+class _LogTail:
+    """Read whole lines appended to the process log since the last poll."""
+
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self._offset = 0
+        self._partial = ""
+
+    def new_lines(self) -> list[str]:
+        if not self.path.is_file():
+            return []
+        try:
+            with self.path.open("rb") as handle:
+                handle.seek(self._offset)
+                chunk = handle.read()
+                self._offset = handle.tell()
+        except OSError:
+            return []
+        if not chunk:
+            return []
+        text = self._partial + chunk.decode("utf-8", errors="replace")
+        lines = text.split("\n")
+        self._partial = lines.pop()
+        return lines
