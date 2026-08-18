@@ -10,6 +10,7 @@ from aisbench_web.jobs.config_generator import (
     REDACTED_API_KEY,
     EndpointSnapshot,
     aisbench_service_url,
+    cli_arguments_for,
     cli_mode_for,
     generate_config,
     render_config,
@@ -302,7 +303,10 @@ def test_num_prompts_limits_the_dataset_and_is_omitted_when_unset() -> None:
     assert "test_range" not in unlimited
 
 
-def test_worker_count_reaches_the_runner() -> None:
+def test_worker_count_travels_on_the_command_line_not_in_the_config() -> None:
+    """AISBench builds its own runner when the config has no infer block, and reads the worker
+    count from its CLI. Naming those internals in the config coupled us to module paths that
+    do not exist in every release."""
     source = render_config(
         mode="accuracy",
         dataset_import=GSM8K_ACCURACY_IMPORT,
@@ -311,5 +315,39 @@ def test_worker_count_reaches_the_runner() -> None:
         parameters={"max_num_workers": 4},
     )
 
-    assert "max_num_workers=4" in source
-    compile(source, "<generated>", "exec")
+    assert "infer" not in source
+    assert cli_arguments_for({"max_num_workers": 4}) == ["--max-num-workers", "4"]
+    assert cli_arguments_for({}) == ["--max-num-workers", "1"]
+
+
+VERIFIED_IMPORT_ROOTS = (
+    "mmengine.config",
+    "ais_bench.benchmark.configs.datasets.",
+    "ais_bench.benchmark.configs.models.",
+    "ais_bench.benchmark.configs.summarizers.",
+)
+
+
+@pytest.mark.parametrize("mode", ["accuracy", "performance"])
+def test_generated_config_imports_only_verified_modules(mode: str) -> None:
+    """A config may only name modules checked against the installed AISBench.
+
+    An unverified import fails at run time, not at load time: mmengine defers imports, so a
+    config that loads cleanly can still name a module that does not exist.
+    """
+    source = render_config(
+        mode=mode,
+        dataset_import=GSM8K_ACCURACY_IMPORT if mode == "accuracy" else GSM8K_PERFORMANCE_IMPORT,
+        dataset_symbol="gsm8k_datasets",
+        endpoint=endpoint_snapshot(),
+        parameters={},
+    )
+
+    imported = [
+        node.module
+        for node in ast.walk(ast.parse(source))
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    ]
+    assert imported
+    for module in imported:
+        assert module.startswith(VERIFIED_IMPORT_ROOTS), module

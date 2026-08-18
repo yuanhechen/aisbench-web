@@ -8,6 +8,7 @@ from pathlib import Path
 from aisbench_web.db import Database
 from aisbench_web.jobs.config_generator import (
     EndpointSnapshot,
+    cli_arguments_for,
     cli_mode_for,
     generate_config,
     render_config,
@@ -155,6 +156,7 @@ class Worker:
                 output_dir=output_dir,
                 log_path=log_path,
                 job_dir=job_dir,
+                extra_arguments=cli_arguments_for(job.parameters),
             )
         except Exception as exc:
             logger.warning("Could not start job %s", job.id, exc_info=exc)

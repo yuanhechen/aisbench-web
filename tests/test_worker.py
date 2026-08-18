@@ -185,6 +185,7 @@ def test_command_line_matches_the_documented_cli() -> None:
         config_path=Path("/jobs/j1/generated_config.py"),
         cli_mode="perf_viz",
         output_dir=Path("/jobs/j1/outputs"),
+        extra_arguments=["--max-num-workers", "2"],
     )
 
     assert command == [
@@ -194,7 +195,44 @@ def test_command_line_matches_the_documented_cli() -> None:
         "perf_viz",
         "--work-dir",
         "/jobs/j1/outputs",
+        "--max-num-workers",
+        "2",
     ]
+
+
+def test_the_worker_passes_the_requested_worker_count_to_the_cli(harness: Harness) -> None:
+    """The runner is built by AISBench from its own CLI, so the count must travel there."""
+    seen: list[list[str]] = []
+    real_launch = harness.worker.runner.launch
+
+    def record(**kwargs):
+        seen.append(list(kwargs["extra_arguments"] or []))
+        return real_launch(**kwargs)
+
+    harness.worker.runner.launch = record  # type: ignore[method-assign]
+    harness.jobs.create(
+        owner_id=harness.owner,
+        model_endpoint_id="endpoint-1",
+        dataset_id="gsm8k",
+        mode="accuracy",
+        parameters={"num_prompts": 8, "max_num_workers": 3},
+        model_snapshot={
+            "abbr": "job-model",
+            "base_url": "http://127.0.0.1:8001/v1",
+            "model_name": "Qwen3-32B",
+            "encrypted_api_key": harness.encrypted_api_key,
+            "max_output_length": 512,
+        },
+        dataset_snapshot={
+            "id": "gsm8k",
+            "config_import": GSM8K_IMPORT,
+            "dataset_symbol": "gsm8k_datasets",
+        },
+    )
+
+    harness.worker.run_pending_once()
+
+    assert seen == [["--max-num-workers", "3"]]
 
 
 # --- execution ---------------------------------------------------------------
@@ -209,8 +247,10 @@ def test_worker_runs_oldest_job_and_captures_logs(harness: Harness) -> None:
     assert harness.jobs.get_for_owner(first.id, harness.owner).status == JobStatus.SUCCEEDED
     assert "PROGRESS 8/8" in harness.log_of(first)
     assert harness.jobs.get_for_owner(second.id, harness.owner).status == JobStatus.QUEUED
-    summary = harness.settings.jobs_dir / first.output_dir / "summary" / "summary_test.csv"
-    assert summary.exists()
+    summaries = list(
+        (harness.settings.jobs_dir / first.output_dir).glob("*/summary/summary_test.csv")
+    )
+    assert len(summaries) == 1
 
 
 def test_exit_code_zero_is_success_and_nonzero_is_failure(harness: Harness) -> None:
@@ -362,10 +402,14 @@ def test_a_successful_run_stores_metrics_and_artifacts(harness: Harness) -> None
     harness.worker.run_pending_once()
 
     metrics = {m.key: m for m in harness.jobs.list_metrics_for_owner(job.id, harness.owner)}
-    artifacts = {a.relative_path: a for a in harness.jobs.list_artifacts_for_owner(job.id, harness.owner)}
+    artifacts = {
+        a.relative_path: a for a in harness.jobs.list_artifacts_for_owner(job.id, harness.owner)
+    }
+    summary_path = next(path for path in artifacts if path.endswith("summary_test.csv"))
     assert metrics["gsm8k.accuracy"].value == 87.5
-    assert artifacts["summary/summary_test.csv"].kind == "summary"
-    assert artifacts["summary/summary_test.csv"].content_type == "text/csv"
+    assert summary_path.count("/") == 2, summary_path
+    assert artifacts[summary_path].kind == "summary"
+    assert artifacts[summary_path].content_type == "text/csv"
 
 
 def test_progress_is_persisted_so_a_refresh_can_show_it(harness: Harness) -> None:

@@ -21,6 +21,7 @@ def parse_args(argv=None):
     parser.add_argument("config")
     parser.add_argument("--mode", default="all")
     parser.add_argument("--work-dir", required=True)
+    parser.add_argument("--max-num-workers", type=int, default=1)
     parser.add_argument(
         "--scenario",
         default=os.environ.get("FAKE_AIS_BENCH_SCENARIO", "success"),
@@ -32,7 +33,8 @@ def parse_args(argv=None):
 def run_success(work_dir: Path) -> int:
     for completed in (2, 5, TOTAL_PROMPTS):
         print(f"PROGRESS {completed}/{TOTAL_PROMPTS}", flush=True)
-    summary = work_dir / "summary"
+    # The real CLI writes each invocation into its own timestamped directory.
+    summary = work_dir / time.strftime("%Y%m%d_%H%M%S") / "summary"
     summary.mkdir(parents=True, exist_ok=True)
     (summary / "summary_test.csv").write_text(SUMMARY_CSV, encoding="utf-8")
     print("AISBench finished", flush=True)

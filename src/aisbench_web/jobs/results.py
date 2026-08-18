@@ -96,10 +96,24 @@ def safe_artifact_path(job_dir: Path, relative_path: str) -> Path:
     return candidate
 
 
+def _newest(paths: list[Path]) -> list[Path]:
+    """Sort by modification time so the most recent run wins regardless of directory naming."""
+    return sorted(paths, key=lambda path: (path.stat().st_mtime, path.name))
+
+
 def parse_accuracy(output_dir: Path) -> ParsedResults:
-    """Read the newest summary CSV; identity columns label the row, model columns carry values."""
+    """Read the newest summary CSV; identity columns label the row, model columns carry values.
+
+    AISBench writes into a timestamped run directory under the work dir, so the summary is
+    searched at any depth rather than only directly beneath it.
+    """
     results = ParsedResults()
-    summaries = sorted((output_dir / SUMMARY_DIRNAME).glob("summary_*.csv"))
+    summaries = _newest(
+        [
+            *output_dir.glob(f"{SUMMARY_DIRNAME}/summary_*.csv"),
+            *output_dir.glob(f"*/{SUMMARY_DIRNAME}/summary_*.csv"),
+        ]
+    )
     if not summaries:
         results.warnings.append("No accuracy summary was produced under summary/.")
         return results
@@ -127,8 +141,12 @@ def parse_accuracy(output_dir: Path) -> ParsedResults:
 def parse_performance(output_dir: Path) -> ParsedResults:
     """Normalize recognized performance metrics and keep unknown ones under extra.*."""
     results = ParsedResults()
-    performances = output_dir / PERFORMANCES_DIRNAME
-    documents = sorted(performances.glob("*/*.json")) if performances.is_dir() else []
+    documents = _newest(
+        [
+            *output_dir.glob(f"{PERFORMANCES_DIRNAME}/*/*.json"),
+            *output_dir.glob(f"*/{PERFORMANCES_DIRNAME}/*/*.json"),
+        ]
+    )
     if not documents:
         results.warnings.append("No performance summary was produced under performances/.")
         return results
@@ -156,18 +174,28 @@ def parse_results(mode: str, output_dir: Path) -> ParsedResults:
     return parse_accuracy(output_dir) if mode == "accuracy" else parse_performance(output_dir)
 
 
+KIND_BY_DIRECTORY = {
+    SUMMARY_DIRNAME: "summary",
+    PREDICTIONS_DIRNAME: "prediction",
+    PERFORMANCES_DIRNAME: "performance",
+    "results": "result",
+    "logs": "log",
+    "configs": "config",
+}
+
+
 def _artifact_kind(relative: Path) -> str:
-    head = relative.parts[0] if relative.parts else ""
+    """Classify by the first recognised directory at any depth.
+
+    The run directory is named after a timestamp, so the meaningful component is rarely the
+    first one.
+    """
     if relative.suffix == ".html":
         return "visualization"
-    if head == SUMMARY_DIRNAME:
-        return "summary"
-    if head == PREDICTIONS_DIRNAME:
-        return "prediction"
-    if head == PERFORMANCES_DIRNAME:
-        return "performance"
-    if relative.suffix in (".log", ".txt") and "log" in relative.name:
-        return "log"
+    for part in relative.parts[:-1]:
+        kind = KIND_BY_DIRECTORY.get(part)
+        if kind is not None:
+            return kind
     return "other"
 
 

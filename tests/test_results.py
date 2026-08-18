@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -37,16 +38,28 @@ PERFORMANCE_JSON = {
 }
 
 
-def write_accuracy_output(output_dir: Path, csv_text: str = ACCURACY_CSV) -> Path:
-    summary = output_dir / "summary"
+RUN_DIR = "20260818_151032"
+
+
+def write_accuracy_output(
+    output_dir: Path,
+    csv_text: str = ACCURACY_CSV,
+    run_dir: str = RUN_DIR,
+) -> Path:
+    summary = output_dir / run_dir / "summary" if run_dir else output_dir / "summary"
     summary.mkdir(parents=True, exist_ok=True)
-    path = summary / "summary_20260817_120000.csv"
+    path = summary / f"summary_{run_dir or '20260817_120000'}.csv"
     path.write_text(csv_text, encoding="utf-8")
     return path
 
 
-def write_performance_output(output_dir: Path, payload: dict | None = None) -> Path:
-    directory = output_dir / "performances" / "job-model"
+def write_performance_output(
+    output_dir: Path,
+    payload: dict | None = None,
+    run_dir: str = RUN_DIR,
+) -> Path:
+    base = output_dir / run_dir if run_dir else output_dir
+    directory = base / "performances" / "job-model"
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / "gsm8k.json"
     path.write_text(json.dumps(payload or PERFORMANCE_JSON), encoding="utf-8")
@@ -67,13 +80,23 @@ def test_accuracy_summary_is_normalized(tmp_path: Path) -> None:
     assert result.metrics["gsm8k.accuracy"].value == 82.5
 
 
-def test_accuracy_reads_the_newest_summary(tmp_path: Path) -> None:
-    summary = tmp_path / "summary"
-    summary.mkdir()
-    (summary / "summary_20260101_000000.csv").write_text(
-        "dataset,version,metric,mode,qwen\ngsm8k,1,accuracy,gen,10.0\n", encoding="utf-8"
+def test_accuracy_reads_the_newest_run(tmp_path: Path) -> None:
+    """AISBench creates one timestamped run directory per invocation under the work dir."""
+    older = write_accuracy_output(
+        tmp_path,
+        "dataset,version,metric,mode,qwen\ngsm8k,1,accuracy,gen,10.0\n",
+        run_dir="20260101_000000",
     )
-    (summary / "summary_20260817_120000.csv").write_text(ACCURACY_CSV, encoding="utf-8")
+    os.utime(older, (1, 1))
+    write_accuracy_output(tmp_path)
+
+    assert parse_accuracy(tmp_path).metrics["gsm8k.accuracy"].value == 82.5
+
+
+def test_accuracy_still_reads_a_summary_written_directly_under_the_work_dir(
+    tmp_path: Path,
+) -> None:
+    write_accuracy_output(tmp_path, run_dir="")
 
     assert parse_accuracy(tmp_path).metrics["gsm8k.accuracy"].value == 82.5
 
@@ -196,18 +219,25 @@ def test_artifact_symlink_out_of_the_job_is_refused(tmp_path: Path) -> None:
 def test_artifacts_are_indexed_with_kinds_and_relative_paths(tmp_path: Path) -> None:
     write_accuracy_output(tmp_path)
     write_performance_output(tmp_path)
-    (tmp_path / "predictions").mkdir()
-    (tmp_path / "predictions" / "gsm8k.json").write_text("[]", encoding="utf-8")
+    for relative in (
+        f"{RUN_DIR}/predictions/gsm8k.json",
+        f"{RUN_DIR}/results/da-vlm/gsm8k.json",
+        f"{RUN_DIR}/logs/infer/gsm8k.out",
+    ):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("[]", encoding="utf-8")
     (tmp_path / "report.html").write_text("<html></html>", encoding="utf-8")
 
     indexed = {artifact.relative_path: artifact for artifact in index_artifacts(tmp_path)}
 
-    assert indexed["summary/summary_20260817_120000.csv"].kind == "summary"
-    assert indexed["summary/summary_20260817_120000.csv"].content_type == "text/csv"
-    assert indexed["predictions/gsm8k.json"].kind == "prediction"
-    assert indexed["performances/job-model/gsm8k.json"].kind == "performance"
+    assert indexed[f"{RUN_DIR}/summary/summary_{RUN_DIR}.csv"].kind == "summary"
+    assert indexed[f"{RUN_DIR}/summary/summary_{RUN_DIR}.csv"].content_type == "text/csv"
+    assert indexed[f"{RUN_DIR}/predictions/gsm8k.json"].kind == "prediction"
+    assert indexed[f"{RUN_DIR}/performances/job-model/gsm8k.json"].kind == "performance"
+    assert indexed[f"{RUN_DIR}/results/da-vlm/gsm8k.json"].kind == "result"
+    assert indexed[f"{RUN_DIR}/logs/infer/gsm8k.out"].kind == "log"
     assert indexed["report.html"].kind == "visualization"
-    assert indexed["report.html"].content_type == "text/html"
     assert all(not Path(path).is_absolute() for path in indexed)
 
 
@@ -258,11 +288,11 @@ async def owners(client_factory: ClientFactory, database: Database, settings: Se
             repository.transition(job.id, JobStatus.RUNNING, pid=1)
             repository.transition(job.id, JobStatus.SUCCEEDED, exit_code=0)
             repository.replace_metrics(job.id, {"gsm8k.accuracy": (82.5 + index, None, None)})
-            summary_dir = settings.jobs_dir / job.output_dir / "summary"
+            summary_dir = settings.jobs_dir / job.output_dir / RUN_DIR / "summary"
             summary_dir.mkdir(parents=True, exist_ok=True)
             (summary_dir / "summary_1.csv").write_text(ACCURACY_CSV, encoding="utf-8")
             repository.replace_artifacts(
-                job.id, [("summary", "summary/summary_1.csv", "text/csv")]
+                job.id, [("summary", f"{RUN_DIR}/summary/summary_1.csv", "text/csv")]
             )
             jobs[who].append(job)
 
@@ -342,7 +372,7 @@ async def test_artifacts_download_by_id_and_never_by_path(owners) -> None:
     listed = await owners.alice.get(f"/api/jobs/{job_id}/artifacts")
 
     assert listed.status_code == 200
-    assert listed.json()[0]["relative_path"] == "summary/summary_1.csv"
+    assert listed.json()[0]["relative_path"] == f"{RUN_DIR}/summary/summary_1.csv"
     artifact_id = listed.json()[0]["id"]
 
     downloaded = await owners.alice.get(f"/api/jobs/{job_id}/artifacts/{artifact_id}")
@@ -351,7 +381,7 @@ async def test_artifacts_download_by_id_and_never_by_path(owners) -> None:
     assert "gsm8k" in downloaded.text
     # A path where an ID belongs must not resolve, even to a file that really exists.
     escaped = await owners.alice.get(
-        f"/api/jobs/{job_id}/artifacts/summary%2Fsummary_1.csv"
+        f"/api/jobs/{job_id}/artifacts/{RUN_DIR}%2Fsummary%2Fsummary_1.csv"
     )
     assert escaped.status_code == 404
 

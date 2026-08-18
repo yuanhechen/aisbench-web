@@ -45,6 +45,7 @@ class ProcessRunner:
         config_path: Path,
         cli_mode: str,
         output_dir: Path,
+        extra_arguments: list[str] | None = None,
     ) -> list[str]:
         return [
             str(ais_bench_path),
@@ -53,6 +54,7 @@ class ProcessRunner:
             cli_mode,
             "--work-dir",
             str(output_dir),
+            *(extra_arguments or []),
         ]
 
     def launch(
@@ -64,6 +66,7 @@ class ProcessRunner:
         output_dir: Path,
         log_path: Path,
         job_dir: Path,
+        extra_arguments: list[str] | None = None,
     ) -> subprocess.Popen:
         output_dir.mkdir(parents=True, exist_ok=True)
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +75,7 @@ class ProcessRunner:
             config_path=config_path,
             cli_mode=cli_mode,
             output_dir=output_dir,
+            extra_arguments=extra_arguments,
         )
         log_file = log_path.open("ab")
         try:
