@@ -502,7 +502,7 @@ describe("shared datasets", () => {
     renderAt("/datasets");
 
     expect(await screen.findByText("gsm8k")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "多模态" }));
+    await user.selectOptions(screen.getByLabelText("分类筛选"), "domain:multimodal");
 
     expect(screen.getByText("textvqa")).toBeInTheDocument();
     expect(screen.queryByText("gsm8k")).not.toBeInTheDocument();
@@ -517,14 +517,57 @@ describe("shared datasets", () => {
     expect(within(table).getByText("多学科理解（英文）")).toBeInTheDocument();
   });
 
-  it("narrows by task type", async () => {
+  it("does not list a task that covers its whole domain", async () => {
+    server.use(
+      http.get("/api/datasets", () =>
+        HttpResponse.json([
+          { ...MMLU, id: "sharegpt", name: "sharegpt", category: "dialogue", task: "多轮对话" },
+          { ...MMLU, id: "mtbench", name: "mtbench", category: "dialogue", task: "多轮对话" },
+        ]),
+      ),
+    );
+    renderAt("/datasets");
+
+    const filter = await screen.findByLabelText("分类筛选");
+    // Offering the domain and its only task would present the same set under two names.
+    expect(within(filter).getAllByRole("option", { name: /多轮对话/ })).toHaveLength(1);
+  });
+
+  it("narrows to one task inside its domain", async () => {
     const user = userEvent.setup();
     renderAt("/datasets");
 
-    await user.selectOptions(await screen.findByLabelText("任务类型"), "数学推理");
+    await user.selectOptions(await screen.findByLabelText("分类筛选"), "task:数学推理");
 
     expect(screen.getByText("gsm8k")).toBeInTheDocument();
     expect(screen.queryByText("mmlu")).not.toBeInTheDocument();
+  });
+
+  it("groups tasks under the domain they belong to, with counts", async () => {
+    server.use(
+      http.get("/api/datasets", () =>
+        HttpResponse.json([
+          GSM8K,
+          MMLU,
+          {
+            ...MMLU,
+            id: "textvqa",
+            name: "textvqa",
+            category: "multimodal",
+            task: "多模态理解（图+文）",
+          },
+        ]),
+      ),
+    );
+    renderAt("/datasets");
+
+    const filter = await screen.findByLabelText("分类筛选");
+    // One control over one tree: a domain and the tasks inside it are not separate axes.
+    const groups = [...filter.querySelectorAll("optgroup")].map((group) => group.label);
+    expect(groups).toEqual(["LLM", "多模态"]);
+    expect(within(filter).getByRole("option", { name: /^LLM（2）/ })).toBeInTheDocument();
+    expect(within(filter).getByRole("option", { name: /数学推理（1）/ })).toBeInTheDocument();
+    expect(within(filter).getByRole("option", { name: "全部数据集（3）" })).toBeInTheDocument();
   });
 
   it("finds a dataset by searching its task type", async () => {
@@ -541,8 +584,8 @@ describe("shared datasets", () => {
     server.use(http.get("/api/datasets", () => HttpResponse.json([GSM8K])));
     renderAt("/datasets");
 
-    expect(await screen.findByRole("button", { name: "LLM" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "多模态" })).not.toBeInTheDocument();
+    const filter = await screen.findByLabelText("分类筛选");
+    expect([...filter.querySelectorAll("optgroup")].map((group) => group.label)).toEqual(["LLM"]);
   });
 
   it("says so when nothing matches instead of showing an empty table", async () => {

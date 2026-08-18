@@ -10,9 +10,11 @@ import { PageHeader } from "../components/page-header";
 
 const POLL_MS = 1500;
 const ALL = "";
+const DOMAIN = "domain:";
+const TASK = "task:";
 
 // Domains as published in the AISBench documentation; "other" is what it does not list.
-const CATEGORY_LABELS: Record<string, MessageKey> = {
+const DOMAIN_LABELS: Record<string, MessageKey> = {
   llm: "datasets.categoryLlm",
   multimodal: "datasets.categoryMultimodal",
   dialogue: "datasets.categoryDialogue",
@@ -20,7 +22,7 @@ const CATEGORY_LABELS: Record<string, MessageKey> = {
   custom: "datasets.categoryCustom",
   other: "datasets.categoryOther",
 };
-const CATEGORY_ORDER = ["llm", "multimodal", "dialogue", "synthetic", "custom", "other"];
+const DOMAIN_ORDER = ["llm", "multimodal", "dialogue", "synthetic", "custom", "other"];
 
 const STATUS_LABELS: Record<Dataset["status"], MessageKey> = {
   not_installed: "datasets.notInstalled",
@@ -29,6 +31,13 @@ const STATUS_LABELS: Record<Dataset["status"], MessageKey> = {
   failed: "datasets.failed",
   detected: "datasets.detected",
 };
+
+interface Group {
+  domain: string;
+  label: string;
+  count: number;
+  tasks: { name: string; count: number }[];
+}
 
 /** Summarise the variants AISBench ships, in the reader's language. */
 function useConfigSummary() {
@@ -54,8 +63,8 @@ export function DatasetsPage() {
   const [error, setError] = useState<string | null>(null);
   const [watching, setWatching] = useState(false);
   const [query, setQuery] = useState("");
-  const [category, setCategory] = useState(ALL);
-  const [task, setTask] = useState(ALL);
+  // One selection over one tree: a whole domain, or one task inside it.
+  const [selection, setSelection] = useState(ALL);
   const describeConfigs = useConfigSummary();
   // Installs run in the background on the server, so the shared rows are polled -- but only
   // while one is actually running. A settled catalog does not change on its own.
@@ -87,29 +96,43 @@ export function DatasetsPage() {
   }, [datasets.data, installing, watching]);
 
   const all = datasets.data ?? [];
-  // Only offer a domain that something is actually in.
-  const presentCategories = useMemo(
-    () => CATEGORY_ORDER.filter((name) => all.some((dataset) => dataset.category === name)),
-    [all],
-  );
-  // Only offer a task something is actually in, in the order the table shows them.
-  const presentTasks = useMemo(() => {
-    const seen = new Set<string>();
+
+  // A task belongs to exactly one domain, so the filter is one tree, not two axes.
+  const groups = useMemo<Group[]>(() => {
+    const byDomain = new Map<string, Map<string, number>>();
+    const totals = new Map<string, number>();
     for (const dataset of all) {
-      if (dataset.task !== "" && (category === ALL || dataset.category === category)) {
-        seen.add(dataset.task);
+      const domain = dataset.category;
+      totals.set(domain, (totals.get(domain) ?? 0) + 1);
+      const tasks = byDomain.get(domain) ?? new Map<string, number>();
+      if (dataset.task !== "") {
+        tasks.set(dataset.task, (tasks.get(dataset.task) ?? 0) + 1);
       }
+      byDomain.set(domain, tasks);
     }
-    return [...seen].sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
-  }, [all, category]);
+    return DOMAIN_ORDER.filter((domain) => totals.has(domain)).map((domain) => {
+      const count = totals.get(domain) ?? 0;
+      const tasks = [...(byDomain.get(domain) ?? new Map())]
+        .map(([name, taskCount]) => ({ name, count: taskCount }))
+        .sort((left, right) => left.name.localeCompare(right.name, "zh-Hans-CN"));
+      return {
+        domain,
+        label: t(DOMAIN_LABELS[domain]),
+        count,
+        // One task covering the whole domain narrows nothing: listing it would offer the
+        // same set twice under two names.
+        tasks: tasks.length === 1 && tasks[0].count === count ? [] : tasks,
+      };
+    });
+  }, [all, t]);
 
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return all.filter((dataset) => {
-      if (category !== ALL && dataset.category !== category) {
+      if (selection.startsWith(DOMAIN) && dataset.category !== selection.slice(DOMAIN.length)) {
         return false;
       }
-      if (task !== ALL && dataset.task !== task) {
+      if (selection.startsWith(TASK) && dataset.task !== selection.slice(TASK.length)) {
         return false;
       }
       if (needle === "") {
@@ -123,7 +146,7 @@ export function DatasetsPage() {
         dataset.configs.some((config) => config.name.toLowerCase().includes(needle))
       );
     });
-  }, [all, category, task, query]);
+  }, [all, selection, query]);
 
   function statusOf(dataset: Dataset): Dataset["status"] {
     if (dataset.status === "available" || dataset.status === "failed") {
@@ -142,6 +165,12 @@ export function DatasetsPage() {
         </span>
       </PageHeader>
 
+      {error !== null && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+
       <div className="filter-row">
         <input
           className="input search-input"
@@ -151,55 +180,31 @@ export function DatasetsPage() {
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <div className="chip-row" role="group" aria-label={t("datasets.category")}>
-          <button
-            type="button"
-            className="chip"
-            aria-pressed={category === ALL}
-            onClick={() => {
-              setCategory(ALL);
-              setTask(ALL);
-            }}
-          >
-            {t("jobs.filterAll")}
-          </button>
-          {presentCategories.map((name) => (
-            <button
-              key={name}
-              type="button"
-              className="chip"
-              aria-pressed={category === name}
-              onClick={() => {
-                setCategory(name);
-                // A task belongs to one domain; switching domains invalidates the choice.
-                setTask(ALL);
-              }}
-            >
-              {t(CATEGORY_LABELS[name])}
-            </button>
-          ))}
-        </div>
-        {presentTasks.length > 1 && (
-          <select
-            className="input task-select"
-            aria-label={t("datasets.task")}
-            value={task}
-            onChange={(event) => setTask(event.target.value)}
-          >
-            <option value={ALL}>{t("datasets.allTasks")}</option>
-            {presentTasks.map((name) => (
-              <option key={name} value={name}>
-                {name}
+        <select
+          className="input filter-select"
+          aria-label={t("datasets.filter")}
+          value={selection}
+          onChange={(event) => setSelection(event.target.value)}
+        >
+          <option value={ALL}>
+            {t("datasets.allDatasets")}（{all.length}）
+          </option>
+          {groups.map((group) => (
+            <optgroup key={group.domain} label={group.label}>
+              <option value={`${DOMAIN}${group.domain}`}>
+                {group.label}（{group.count}）
               </option>
-            ))}
-          </select>
-        )}
+              {group.tasks.map((task) => (
+                <option key={task.name} value={`${TASK}${task.name}`}>
+                  {"\u2003"}
+                  {task.name}（{task.count}）
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
       </div>
-      {error !== null && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
+
       <table className="data-table">
         <thead>
           <tr>
