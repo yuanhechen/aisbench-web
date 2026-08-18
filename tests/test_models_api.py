@@ -245,8 +245,8 @@ async def test_an_address_can_be_probed_before_it_is_saved(
     assert probe.status_code == 200
     assert probe.json()["ok"] is True
     assert probe.json()["models"] == ["Qwen3-32B", "another-model"]
-    assert str(requests[-1].url) == "http://127.0.0.1:8001/v1/models"
-    assert requests[-1].headers["authorization"] == "Bearer secret-token"
+    assert str(requests[0].url) == "http://127.0.0.1:8001/v1/models"
+    assert requests[0].headers["authorization"] == "Bearer secret-token"
     assert "secret-token" not in probe.text
     # Probing stores nothing.
     assert (await client.get("/api/models")).json() == []
@@ -335,11 +335,20 @@ async def test_probe_reports_success_without_exposing_the_key(
 
     assert probe.status_code == 200
     assert probe.json()["ok"] is True
-    assert probe.json().keys() == {"ok", "latency_ms", "message", "models"}
+    assert probe.json().keys() == {
+        "ok",
+        "latency_ms",
+        "message",
+        "models",
+        "request_url",
+        "runnable",
+    }
     assert probe.json()["latency_ms"] >= 0
     assert "secret-token" not in probe.text
-    assert str(requests[-1].url) == "http://127.0.0.1:8001/v1/models"
-    assert requests[-1].headers["authorization"] == "Bearer secret-token"
+    # The listing first, then the path AISBench will actually call.
+    assert str(requests[0].url) == "http://127.0.0.1:8001/v1/models"
+    assert str(requests[1].url) == "http://127.0.0.1:8001/v1/chat/completions"
+    assert requests[0].headers["authorization"] == "Bearer secret-token"
 
 
 @pytest.mark.asyncio
@@ -361,6 +370,61 @@ async def test_a_timeout_reports_a_reason_rather_than_a_bare_colon(
     assert probe.json()["ok"] is False
     assert "timed out" in probe.json()["message"]
     assert not probe.json()["message"].rstrip().endswith(":")
+
+
+@pytest.mark.asyncio
+async def test_probe_refuses_an_endpoint_aisbench_cannot_actually_call(
+    api_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    """Listing models proves the service is up, not that the benchmark can drive it.
+
+    AISBench appends a fixed v1/chat/completions to the service root, so a service that
+    serves its chat path elsewhere answers the listing and then 404s every request.
+    """
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json=MODEL_LISTING)
+        return httpx.Response(404, text="not found")
+
+    install_probe_transport(api_app, serve)
+
+    probe = await client.post(
+        "/api/models/probe", json={"base_url": "https://example.test/api/paas/v4"}
+    )
+
+    assert probe.status_code == 200
+    assert probe.json()["ok"] is False
+    assert probe.json()["runnable"] is False
+    # The message names the URL that does not exist, so the reason is actionable.
+    assert probe.json()["request_url"] == "https://example.test/api/paas/v4/v1/chat/completions"
+    assert probe.json()["models"] == ["Qwen3-32B", "another-model"]
+
+
+@pytest.mark.asyncio
+async def test_probe_accepts_an_endpoint_whose_chat_path_aisbench_serves(
+    api_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    seen: list[str] = []
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        seen.append(request.url.path)
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json=MODEL_LISTING)
+        # Anything but 404 proves the path is served; a POST would spend tokens to learn it.
+        return httpx.Response(405, text="method not allowed")
+
+    install_probe_transport(api_app, serve)
+
+    probe = await client.post(
+        "/api/models/probe", json={"base_url": "http://127.0.0.1:8001/v1"}
+    )
+
+    assert probe.json()["ok"] is True
+    assert probe.json()["runnable"] is True
+    assert seen == ["/v1/models", "/v1/chat/completions"]
 
 
 @pytest.mark.asyncio

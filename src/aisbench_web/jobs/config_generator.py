@@ -5,6 +5,8 @@ from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
 REDACTED_API_KEY = "***"
+# AISBench's chat model class appends exactly this to the service root.
+CHAT_ENDPOINT = "v1/chat/completions"
 DOTTED_PATH = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)*$")
 IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 

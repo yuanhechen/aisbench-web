@@ -1,6 +1,6 @@
 import time
 from typing import Annotated, Any
-from urllib.parse import urlsplit
+from urllib.parse import urljoin, urlsplit
 
 import httpx
 from cryptography.fernet import Fernet
@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, SecretStr, field_validator
 
 from aisbench_web.dependencies import get_current_user
+from aisbench_web.jobs.config_generator import CHAT_ENDPOINT, aisbench_service_url
 from aisbench_web.repositories.models import (
     DuplicateEndpointNameError,
     ModelEndpoint,
@@ -122,6 +123,11 @@ class ProbeResponse(BaseModel):
     latency_ms: int
     message: str
     models: list[str] = []
+    #: The URL AISBench will actually call for this endpoint.
+    request_url: str = ""
+    #: Whether that URL exists. Listing models proves the service is up, not that AISBench
+    #: can drive it: the model class appends a fixed v1/chat/completions to the service root.
+    runnable: bool = True
 
 
 def _reason_for(exc: httpx.HTTPError) -> str:
@@ -139,6 +145,7 @@ class ModelEndpointProber:
 
     async def probe(self, base_url: str, api_key: str | None) -> ProbeResponse:
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+        request_url = urljoin(aisbench_service_url(base_url), CHAT_ENDPOINT)
         started = time.perf_counter()
         try:
             async with httpx.AsyncClient(
@@ -146,26 +153,64 @@ class ModelEndpointProber:
                 timeout=PROBE_TIMEOUT_SECONDS,
             ) as client:
                 response = await client.get(f"{base_url}/models", headers=headers)
+                if not response.is_success:
+                    return ProbeResponse(
+                        ok=False,
+                        latency_ms=self._elapsed_ms(started),
+                        message=f"Model API responded with HTTP {response.status_code}",
+                        request_url=request_url,
+                    )
+                models = self._model_ids(response)
+                # Listing models only proves the service is up. AISBench appends a fixed
+                # v1/chat/completions to the service root, so the path it will really call
+                # has to exist too, or every request in every job returns 404.
+                runnable = await self._path_exists(client, request_url, headers)
         except httpx.HTTPError as exc:
             return ProbeResponse(
                 ok=False,
                 latency_ms=self._elapsed_ms(started),
                 message=f"Could not reach the model API: {_reason_for(exc)}",
+                request_url=request_url,
             )
 
         latency_ms = self._elapsed_ms(started)
-        if response.is_success:
+        if runnable:
             return ProbeResponse(
                 ok=True,
                 latency_ms=latency_ms,
                 message="Model API reachable",
-                models=self._model_ids(response),
+                models=models,
+                request_url=request_url,
+                runnable=True,
             )
         return ProbeResponse(
             ok=False,
             latency_ms=latency_ms,
-            message=f"Model API responded with HTTP {response.status_code}",
+            message=(
+                "The service answered, but AISBench would request "
+                f"{request_url}, which this service does not serve. "
+                "AISBench drives endpoints whose chat path is <root>/v1/chat/completions."
+            ),
+            models=models,
+            request_url=request_url,
+            runnable=False,
         )
+
+    @staticmethod
+    async def _path_exists(
+        client: httpx.AsyncClient,
+        url: str,
+        headers: dict[str, str],
+    ) -> bool:
+        """A GET is enough to tell an existing chat path from a missing one, and costs nothing.
+
+        Anything but 404 means the path is served; a POST would spend tokens to learn the same.
+        """
+        try:
+            response = await client.get(url, headers=headers)
+        except httpx.HTTPError:
+            return False
+        return response.status_code != 404
 
     @staticmethod
     def _model_ids(response: httpx.Response) -> list[str]:

@@ -35,6 +35,8 @@ export interface ProbeResult {
   latency_ms: number;
   message: string;
   models: string[];
+  request_url: string;
+  runnable: boolean;
 }
 
 export interface Job {
