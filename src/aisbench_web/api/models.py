@@ -5,7 +5,7 @@ from urllib.parse import urlsplit
 import httpx
 from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from pydantic import BaseModel, Field, SecretStr, field_validator
+from pydantic import BaseModel, SecretStr, field_validator
 
 from aisbench_web.dependencies import get_current_user
 from aisbench_web.repositories.models import (
@@ -21,8 +21,6 @@ router = APIRouter(prefix="/api/models")
 NAME_MAX_LENGTH = 128
 MODEL_NAME_MAX_LENGTH = 256
 API_KEY_MAX_LENGTH = 4096
-REQUEST_TIMEOUT_RANGE = (1, 600)
-MAX_OUTPUT_LENGTH_RANGE = (1, 131072)
 PROBE_TIMEOUT_SECONDS = 5.0
 NOT_FOUND_DETAIL = "model endpoint not found"
 
@@ -59,12 +57,6 @@ class ModelEndpointCreate(BaseModel):
     base_url: str
     name: str = ""
     api_key: SecretStr | None = None
-    request_timeout: int = Field(
-        default=60, ge=REQUEST_TIMEOUT_RANGE[0], le=REQUEST_TIMEOUT_RANGE[1]
-    )
-    max_output_length: int = Field(
-        default=512, ge=MAX_OUTPUT_LENGTH_RANGE[0], le=MAX_OUTPUT_LENGTH_RANGE[1]
-    )
 
     @field_validator("name")
     @classmethod
@@ -90,12 +82,6 @@ class ModelEndpointUpdate(BaseModel):
     name: str | None = None
     base_url: str | None = None
     api_key: SecretStr | None = None
-    request_timeout: int | None = Field(
-        default=None, ge=REQUEST_TIMEOUT_RANGE[0], le=REQUEST_TIMEOUT_RANGE[1]
-    )
-    max_output_length: int | None = Field(
-        default=None, ge=MAX_OUTPUT_LENGTH_RANGE[0], le=MAX_OUTPUT_LENGTH_RANGE[1]
-    )
     is_active: bool | None = None
 
     @field_validator("name")
@@ -117,8 +103,6 @@ class ModelEndpointResponse(BaseModel):
     base_url: str
     model_name: str
     has_api_key: bool
-    request_timeout: int
-    max_output_length: int
     is_active: bool
 
     @classmethod
@@ -129,8 +113,6 @@ class ModelEndpointResponse(BaseModel):
             base_url=endpoint.base_url,
             model_name=endpoint.model_name,
             has_api_key=endpoint.has_api_key,
-            request_timeout=endpoint.request_timeout,
-            max_output_length=endpoint.max_output_length,
             is_active=endpoint.is_active,
         )
 
@@ -140,6 +122,13 @@ class ProbeResponse(BaseModel):
     latency_ms: int
     message: str
     models: list[str] = []
+
+
+def _reason_for(exc: httpx.HTTPError) -> str:
+    """Describe a transport failure. A timeout's str() is empty, which reads as no reason."""
+    if isinstance(exc, httpx.TimeoutException):
+        return f"timed out after {PROBE_TIMEOUT_SECONDS:g}s"
+    return str(exc) or exc.__class__.__name__
 
 
 class ModelEndpointProber:
@@ -161,7 +150,7 @@ class ModelEndpointProber:
             return ProbeResponse(
                 ok=False,
                 latency_ms=self._elapsed_ms(started),
-                message=f"Could not reach the model API: {exc}",
+                message=f"Could not reach the model API: {_reason_for(exc)}",
             )
 
         latency_ms = self._elapsed_ms(started)
@@ -278,8 +267,6 @@ async def create_model_endpoint(
             base_url=payload.base_url,
             model_name=detected.models[0] if detected.models else "",
             encrypted_api_key=_encrypted(cipher, payload.api_key),
-            request_timeout=payload.request_timeout,
-            max_output_length=payload.max_output_length,
         )
     except DuplicateEndpointNameError as exc:
         raise HTTPException(

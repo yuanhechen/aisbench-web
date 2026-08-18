@@ -13,8 +13,6 @@ const MODEL = {
   base_url: "http://127.0.0.1:8001/v1",
   model_name: "Qwen3-32B",
   has_api_key: true,
-  request_timeout: 60,
-  max_output_length: 512,
   is_active: true,
 };
 const GSM8K = {
@@ -163,6 +161,9 @@ describe("my models", () => {
     );
     expect(screen.getByLabelText("API Key")).toBeInTheDocument();
     expect(screen.queryByLabelText("模型名")).not.toBeInTheDocument();
+    // Per-run limits belong to the evaluation form, not to an endpoint.
+    expect(screen.queryByLabelText("请求超时（秒）")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("默认最大输出长度")).not.toBeInTheDocument();
   });
 
   it("probes the typed address for connectivity and the model name", async () => {

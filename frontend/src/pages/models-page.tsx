@@ -12,17 +12,9 @@ interface Draft {
   base_url: string;
   api_key: string;
   name: string;
-  request_timeout: string;
-  max_output_length: string;
 }
 
-const EMPTY_DRAFT: Draft = {
-  base_url: "",
-  api_key: "",
-  name: "",
-  request_timeout: "60",
-  max_output_length: "512",
-};
+const EMPTY_DRAFT: Draft = { base_url: "", api_key: "", name: "" };
 
 export function ModelsPage() {
   const { t } = useI18n();
@@ -191,8 +183,6 @@ function CreateEndpointDialog({
         base_url: draft.base_url,
         // An empty box means "no key", not an empty key.
         api_key: draft.api_key === "" ? null : draft.api_key,
-        request_timeout: Number(draft.request_timeout),
-        max_output_length: Number(draft.max_output_length),
       });
       onCreated();
     } catch (failure) {
@@ -253,26 +243,19 @@ function CreateEndpointDialog({
         </div>
         <p className="field-hint">{t("models.detectHint")}</p>
 
-        {(
-          [
-            ["name", t("models.name"), "text"],
-            ["request_timeout", t("models.timeout"), "number"],
-            ["max_output_length", t("models.maxOutput"), "number"],
-          ] as const
-        ).map(([field, label, type]) => (
-          <div key={field}>
-            <label className="field" htmlFor={`model-${field}`}>
-              {label}
-            </label>
-            <input
-              id={`model-${field}`}
-              className="input"
-              type={type}
-              value={draft[field]}
-              onChange={(event) => update(field, event.target.value)}
-            />
-          </div>
-        ))}
+        <div>
+          <label className="field" htmlFor="model-name">
+            {t("models.name")}
+          </label>
+          <input
+            id="model-name"
+            className="input"
+            type="text"
+            placeholder={t("models.namePlaceholder")}
+            value={draft.name}
+            onChange={(event) => update("name", event.target.value)}
+          />
+        </div>
         {error !== null && (
           <p className="form-error" role="alert">
             {error}

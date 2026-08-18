@@ -11,8 +11,6 @@ ENDPOINT_PAYLOAD = {
     "name": "qwen",
     "base_url": "http://127.0.0.1:8001/v1",
     "api_key": "secret-token",
-    "request_timeout": 60,
-    "max_output_length": 512,
 }
 MODEL_LISTING = {"data": [{"id": "Qwen3-32B"}, {"id": "another-model"}]}
 RESPONSE_FIELDS = {
@@ -21,8 +19,6 @@ RESPONSE_FIELDS = {
     "base_url",
     "model_name",
     "has_api_key",
-    "request_timeout",
-    "max_output_length",
     "is_active",
 }
 
@@ -151,10 +147,6 @@ async def test_names_are_unique_per_owner_only(client_factory: ClientFactory) ->
         {"base_url": "127.0.0.1:8001"},
         {"base_url": "ftp://127.0.0.1:8001/v1"},
         {"base_url": "http:///v1"},
-        {"request_timeout": 0},
-        {"request_timeout": 601},
-        {"max_output_length": 0},
-        {"max_output_length": 131073},
         {"name": "x" * 200},
     ],
 )
@@ -304,12 +296,11 @@ async def test_update_edits_fields_and_deactivates_without_touching_the_key(
 
     updated = await client.patch(
         f"/api/models/{created['id']}",
-        json={"name": "qwen-renamed", "request_timeout": 120, "is_active": False},
+        json={"name": "qwen-renamed", "is_active": False},
     )
 
     assert updated.status_code == 200
     assert updated.json()["name"] == "qwen-renamed"
-    assert updated.json()["request_timeout"] == 120
     assert updated.json()["is_active"] is False
     assert updated.json()["has_api_key"] is True
     with database.connect() as connection:
@@ -349,6 +340,27 @@ async def test_probe_reports_success_without_exposing_the_key(
     assert "secret-token" not in probe.text
     assert str(requests[-1].url) == "http://127.0.0.1:8001/v1/models"
     assert requests[-1].headers["authorization"] == "Bearer secret-token"
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_reports_a_reason_rather_than_a_bare_colon(
+    api_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    """httpx timeouts stringify to nothing, which read as "could not reach:" with no reason."""
+
+    def time_out(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectTimeout("", request=request)
+
+    install_probe_transport(api_app, time_out)
+
+    probe = await client.post(
+        "/api/models/probe", json={"base_url": "http://127.0.0.1:9999/v1"}
+    )
+
+    assert probe.json()["ok"] is False
+    assert "timed out" in probe.json()["message"]
+    assert not probe.json()["message"].rstrip().endswith(":")
 
 
 @pytest.mark.asyncio

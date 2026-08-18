@@ -18,8 +18,6 @@ ENDPOINT_PAYLOAD = {
     "name": "qwen",
     "base_url": "http://127.0.0.1:8001/v1",
     "api_key": "secret-token",
-    "request_timeout": 60,
-    "max_output_length": 512,
 }
 MODEL_LISTING = {"data": [{"id": "Qwen3-32B"}]}
 ACCURACY_JOB = {

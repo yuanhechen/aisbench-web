@@ -5,10 +5,9 @@ from uuid import uuid4
 
 from aisbench_web.db import Database
 
-UPDATABLE_COLUMNS = ("name", "base_url", "model_name", "request_timeout", "max_output_length")
+UPDATABLE_COLUMNS = ("name", "base_url", "model_name")
 SELECTED_COLUMNS = (
-    "id, name, base_url, model_name, encrypted_api_key IS NOT NULL AS has_api_key, "
-    "request_timeout, max_output_length, is_active"
+    "id, name, base_url, model_name, encrypted_api_key IS NOT NULL AS has_api_key, is_active"
 )
 
 
@@ -23,8 +22,6 @@ class ModelEndpoint:
     base_url: str
     model_name: str
     has_api_key: bool
-    request_timeout: int
-    max_output_length: int
     is_active: bool
 
 
@@ -42,8 +39,6 @@ class ModelEndpointRepository:
         base_url: str,
         model_name: str,
         encrypted_api_key: bytes | None,
-        request_timeout: int,
-        max_output_length: int,
     ) -> ModelEndpoint:
         endpoint_id = str(uuid4())
         timestamp = datetime.now(timezone.utc).isoformat()
@@ -53,8 +48,8 @@ class ModelEndpointRepository:
                     """
                     INSERT INTO model_endpoints (
                       id, owner_id, name, base_url, model_name, encrypted_api_key,
-                      request_timeout, max_output_length, is_active, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+                      is_active, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)
                     """,
                     (
                         endpoint_id,
@@ -63,8 +58,6 @@ class ModelEndpointRepository:
                         base_url,
                         model_name,
                         encrypted_api_key,
-                        request_timeout,
-                        max_output_length,
                         timestamp,
                         timestamp,
                     ),
@@ -79,8 +72,6 @@ class ModelEndpointRepository:
             base_url=base_url,
             model_name=model_name,
             has_api_key=encrypted_api_key is not None,
-            request_timeout=request_timeout,
-            max_output_length=max_output_length,
             is_active=True,
         )
 
@@ -172,7 +163,5 @@ class ModelEndpointRepository:
             base_url=row["base_url"],
             model_name=row["model_name"],
             has_api_key=bool(row["has_api_key"]),
-            request_timeout=row["request_timeout"],
-            max_output_length=row["max_output_length"],
             is_active=bool(row["is_active"]),
         )

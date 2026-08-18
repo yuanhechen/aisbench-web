@@ -154,7 +154,14 @@ MIGRATION_3 = (
     "ALTER TABLE jobs ADD COLUMN progress_total INTEGER",
 )
 
-LATEST_SCHEMA_VERSION = 3
+# request_timeout was stored but never reached the benchmark, and max_output_length only ever
+# shadowed the per-job value the form always sends. Neither belongs to an endpoint.
+MIGRATION_4 = (
+    "ALTER TABLE model_endpoints DROP COLUMN request_timeout",
+    "ALTER TABLE model_endpoints DROP COLUMN max_output_length",
+)
+
+LATEST_SCHEMA_VERSION = 4
 
 
 class Database:
@@ -210,6 +217,7 @@ class Database:
                 (1, self._apply_migration_1),
                 (2, self._apply_migration_2),
                 (3, self._apply_migration_3),
+                (4, self._apply_migration_4),
             )
             pending = [(version, apply) for version, apply in migrations if version not in applied]
             if not pending:
@@ -232,6 +240,11 @@ class Database:
     @staticmethod
     def _apply_migration_1(connection: sqlite3.Connection) -> None:
         for statement in MIGRATION_1:
+            connection.execute(statement)
+
+    @staticmethod
+    def _apply_migration_4(connection: sqlite3.Connection) -> None:
+        for statement in MIGRATION_4:
             connection.execute(statement)
 
     @staticmethod

@@ -21,6 +21,7 @@ router = APIRouter()
 
 LOG_CHUNK_LIMIT = 256 * 1024
 JOB_NOT_FOUND = "job not found"
+DEFAULT_MAX_OUTPUT_LENGTH = 512
 ACCURACY = "accuracy"
 PERFORMANCE = "performance"
 
@@ -197,8 +198,7 @@ def create_job(
             "name": endpoint.name,
             "base_url": endpoint.base_url,
             "model_name": endpoint.model_name,
-            "max_output_length": parameters.get("max_output_length")
-            or endpoint.max_output_length,
+            "max_output_length": parameters.get("max_output_length") or DEFAULT_MAX_OUTPUT_LENGTH,
             "encrypted_api_key": None if encrypted is None else encrypted.decode("utf-8"),
         },
         dataset_snapshot={

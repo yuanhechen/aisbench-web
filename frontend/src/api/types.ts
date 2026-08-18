@@ -4,8 +4,6 @@ export interface ModelEndpoint {
   base_url: string;
   model_name: string;
   has_api_key: boolean;
-  request_timeout: number;
-  max_output_length: number;
   is_active: boolean;
 }
 
