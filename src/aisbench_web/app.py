@@ -8,6 +8,7 @@ from fastapi.exceptions import RequestValidationError
 from starlette.responses import JSONResponse
 
 from aisbench_web.api.auth import router as auth_router
+from aisbench_web.api.models import router as models_router
 from aisbench_web.db import Database
 from aisbench_web.settings import Settings
 
@@ -190,5 +191,6 @@ def create_app(
         return {"status": "ok", "service": "aisbench-web"}
 
     app.include_router(auth_router)
+    app.include_router(models_router)
 
     return app
