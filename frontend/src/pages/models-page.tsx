@@ -9,19 +9,17 @@ import { useI18n } from "../i18n/i18n-context";
 import { PageHeader } from "../components/page-header";
 
 interface Draft {
-  name: string;
-  host: string;
-  port: string;
+  base_url: string;
   api_key: string;
+  name: string;
   request_timeout: string;
   max_output_length: string;
 }
 
 const EMPTY_DRAFT: Draft = {
-  name: "",
-  host: "",
-  port: "8000",
+  base_url: "",
   api_key: "",
+  name: "",
   request_timeout: "60",
   max_output_length: "512",
 };
@@ -90,7 +88,7 @@ export function ModelsPage() {
                 {!endpoint.is_active && <span className="tag">{t("models.inactive")}</span>}
               </div>
               <div className="resource-meta">
-                <span>{`${endpoint.host}:${endpoint.port}`}</span>
+                <span>{endpoint.base_url}</span>
                 {/* Detected from the service, never typed in. */}
                 <span>
                   {endpoint.model_name === ""
@@ -153,12 +151,34 @@ function CreateEndpointDialog({
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
-  const [useHttps, setUseHttps] = useState(false);
+  const [probe, setProbe] = useState<ProbeResult | null>(null);
+  const [probing, setProbing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
   function update(field: keyof Draft, value: string) {
     setDraft((current) => ({ ...current, [field]: value }));
+    if (field === "base_url" || field === "api_key") {
+      // The previous result described a different address; keep it from looking current.
+      setProbe(null);
+    }
+  }
+
+  async function runProbe() {
+    setError(null);
+    setProbing(true);
+    try {
+      setProbe(
+        await api.post<ProbeResult>("/api/models/probe", {
+          base_url: draft.base_url,
+          api_key: draft.api_key === "" ? null : draft.api_key,
+        }),
+      );
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setProbing(false);
+    }
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -168,9 +188,7 @@ function CreateEndpointDialog({
     try {
       await api.post("/api/models", {
         name: draft.name,
-        host: draft.host,
-        port: Number(draft.port),
-        use_https: useHttps,
+        base_url: draft.base_url,
         // An empty box means "no key", not an empty key.
         api_key: draft.api_key === "" ? null : draft.api_key,
         request_timeout: Number(draft.request_timeout),
@@ -188,11 +206,55 @@ function CreateEndpointDialog({
     <div className="modal-backdrop">
       <form className="modal" role="dialog" aria-label={t("models.create")} onSubmit={handleSubmit}>
         <h2 className="modal-title">{t("models.create")}</h2>
+        <div>
+          <label className="field" htmlFor="model-base_url">
+            {t("models.baseUrl")}
+          </label>
+          <input
+            id="model-base_url"
+            className="input"
+            type="text"
+            placeholder="http://127.0.0.1:8000/v1"
+            value={draft.base_url}
+            onChange={(event) => update("base_url", event.target.value)}
+          />
+        </div>
+        <div>
+          <label className="field" htmlFor="model-api_key">
+            API Key
+          </label>
+          <input
+            id="model-api_key"
+            className="input"
+            type="password"
+            value={draft.api_key}
+            onChange={(event) => update("api_key", event.target.value)}
+          />
+        </div>
+
+        <div className="probe-row">
+          <button
+            type="button"
+            className="button-secondary"
+            disabled={draft.base_url.trim() === "" || probing}
+            onClick={() => void runProbe()}
+          >
+            {probing ? t("models.probing") : t("models.probe")}
+          </button>
+          {probe !== null && (
+            <span className={probe.ok ? "probe-ok" : "probe-failed"} role="status">
+              {probe.ok
+                ? `${t("models.reachable")} · ${probe.latency_ms} ms · ${
+                    probe.models[0] ?? t("models.modelUnknown")
+                  }`
+                : probe.message}
+            </span>
+          )}
+        </div>
+        <p className="field-hint">{t("models.detectHint")}</p>
+
         {(
           [
-            ["host", t("models.host"), "text"],
-            ["port", t("models.port"), "number"],
-            ["api_key", "API Key", "password"],
             ["name", t("models.name"), "text"],
             ["request_timeout", t("models.timeout"), "number"],
             ["max_output_length", t("models.maxOutput"), "number"],
@@ -211,15 +273,6 @@ function CreateEndpointDialog({
             />
           </div>
         ))}
-        <label className="checkbox-option">
-          <input
-            type="checkbox"
-            checked={useHttps}
-            onChange={(event) => setUseHttps(event.target.checked)}
-          />
-          <span>{t("models.useHttps")}</span>
-        </label>
-        <p className="field-hint">{t("models.detectHint")}</p>
         {error !== null && (
           <p className="form-error" role="alert">
             {error}

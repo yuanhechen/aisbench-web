@@ -16,8 +16,7 @@ from conftest import TEST_PASSWORD, ClientFactory
 
 ENDPOINT_PAYLOAD = {
     "name": "qwen",
-    "host": "127.0.0.1",
-    "port": 8001,
+    "base_url": "http://127.0.0.1:8001/v1",
     "api_key": "secret-token",
     "request_timeout": 60,
     "max_output_length": 512,

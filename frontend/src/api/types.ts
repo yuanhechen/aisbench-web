@@ -1,9 +1,6 @@
 export interface ModelEndpoint {
   id: string;
   name: string;
-  host: string;
-  port: number;
-  use_https: boolean;
   base_url: string;
   model_name: string;
   has_api_key: boolean;

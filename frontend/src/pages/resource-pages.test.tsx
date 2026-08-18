@@ -10,9 +10,6 @@ const ALICE = { id: "u1", username: "alice" };
 const MODEL = {
   id: "model-1",
   name: "Qwen3",
-  host: "127.0.0.1",
-  port: 8001,
-  use_https: false,
   base_url: "http://127.0.0.1:8001/v1",
   model_name: "Qwen3-32B",
   has_api_key: true,
@@ -154,16 +151,103 @@ describe("new evaluation", () => {
 });
 
 describe("my models", () => {
-  it("never asks for a model name in the form", async () => {
+  it("asks only for an address and a key", async () => {
     const user = userEvent.setup();
     renderAt("/models");
 
     await user.click(await screen.findByRole("button", { name: "新建模型端点" }));
 
+    expect(screen.getByLabelText("服务地址")).toHaveAttribute(
+      "placeholder",
+      "http://127.0.0.1:8000/v1",
+    );
+    expect(screen.getByLabelText("API Key")).toBeInTheDocument();
     expect(screen.queryByLabelText("模型名")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
-    expect(screen.getByLabelText("IP 或主机名")).toBeInTheDocument();
-    expect(screen.getByLabelText("端口")).toBeInTheDocument();
+  });
+
+  it("probes the typed address for connectivity and the model name", async () => {
+    const user = userEvent.setup();
+    let asked: Record<string, unknown> = {};
+    server.use(
+      http.post("/api/models/probe", async ({ request }) => {
+        asked = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({
+          ok: true,
+          latency_ms: 14,
+          message: "Model API reachable",
+          models: ["Qwen3-32B"],
+        });
+      }),
+    );
+    renderAt("/models");
+
+    await user.click(await screen.findByRole("button", { name: "新建模型端点" }));
+    await user.type(screen.getByLabelText("服务地址"), "http://127.0.0.1:8000/v1");
+    await user.type(screen.getByLabelText("API Key"), "top-secret");
+    await user.click(screen.getByRole("button", { name: "探测" }));
+
+    const result = await screen.findByRole("status");
+    expect(result).toHaveTextContent("连接正常");
+    expect(result).toHaveTextContent("14 ms");
+    expect(result).toHaveTextContent("Qwen3-32B");
+    expect(asked).toEqual({ base_url: "http://127.0.0.1:8000/v1", api_key: "top-secret" });
+  });
+
+  it("cannot probe before an address is typed", async () => {
+    const user = userEvent.setup();
+    renderAt("/models");
+
+    await user.click(await screen.findByRole("button", { name: "新建模型端点" }));
+
+    expect(screen.getByRole("button", { name: "探测" })).toBeDisabled();
+  });
+
+  it("reports an unreachable address inline and still allows saving", async () => {
+    const user = userEvent.setup();
+    let created = false;
+    server.use(
+      http.post("/api/models/probe", () =>
+        HttpResponse.json({
+          ok: false,
+          latency_ms: 5,
+          message: "Could not reach the model API: connection refused",
+          models: [],
+        }),
+      ),
+      http.post("/api/models", () => {
+        created = true;
+        return HttpResponse.json({ ...MODEL, model_name: "" }, { status: 201 });
+      }),
+    );
+    renderAt("/models");
+
+    await user.click(await screen.findByRole("button", { name: "新建模型端点" }));
+    await user.type(screen.getByLabelText("服务地址"), "http://127.0.0.1:9999/v1");
+    await user.click(screen.getByRole("button", { name: "探测" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("connection refused");
+    // Design section 7.1: a temporarily unreachable endpoint must not block saving.
+    await user.click(screen.getByRole("button", { name: "保存" }));
+    await waitFor(() => expect(created).toBe(true));
+  });
+
+  it("drops a probe result once the address changes", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post("/api/models/probe", () =>
+        HttpResponse.json({ ok: true, latency_ms: 9, message: "ok", models: ["Qwen3-32B"] }),
+      ),
+    );
+    renderAt("/models");
+
+    await user.click(await screen.findByRole("button", { name: "新建模型端点" }));
+    await user.type(screen.getByLabelText("服务地址"), "http://127.0.0.1:8000/v1");
+    await user.click(screen.getByRole("button", { name: "探测" }));
+    expect(await screen.findByRole("status")).toBeInTheDocument();
+
+    await user.type(screen.getByLabelText("服务地址"), "2");
+
+    expect(screen.queryByRole("status")).not.toBeInTheDocument();
   });
 
   it("shows a not-yet-detected model instead of an empty gap", async () => {
@@ -180,7 +264,7 @@ describe("my models", () => {
 
     expect(await screen.findByText("Qwen3")).toBeInTheDocument();
     expect(screen.getByText("Qwen3-32B")).toBeInTheDocument();
-    expect(screen.getByText("127.0.0.1:8001")).toBeInTheDocument();
+    expect(screen.getByText("http://127.0.0.1:8001/v1")).toBeInTheDocument();
     expect(screen.getByText("已保存")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("secret");
   });
@@ -197,20 +281,16 @@ describe("my models", () => {
     renderAt("/models");
 
     await user.click(await screen.findByRole("button", { name: "新建模型端点" }));
-    await user.type(screen.getByLabelText("IP 或主机名"), "127.0.0.1");
-    await user.clear(screen.getByLabelText("端口"));
-    await user.type(screen.getByLabelText("端口"), "9000");
+    await user.type(screen.getByLabelText("服务地址"), "http://127.0.0.1:9000/v1");
     await user.type(screen.getByLabelText("API Key"), "top-secret");
     await user.type(screen.getByLabelText("显示名称"), "new");
     await user.click(screen.getByRole("button", { name: "保存" }));
 
     await waitFor(() => expect(created.name).toBe("new"));
     // The address is what the user gives; the model name is never asked for.
-    expect(created.host).toBe("127.0.0.1");
-    expect(created.port).toBe(9000);
+    expect(created.base_url).toBe("http://127.0.0.1:9000/v1");
     expect(created.api_key).toBe("top-secret");
     expect(created).not.toHaveProperty("model_name");
-    expect(created).not.toHaveProperty("base_url");
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );

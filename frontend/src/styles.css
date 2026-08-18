@@ -614,3 +614,11 @@ select.input {
   height: 420px;
   width: 100%;
 }
+
+.probe-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 4px;
+}

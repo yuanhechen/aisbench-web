@@ -9,8 +9,7 @@ from conftest import ClientFactory
 
 ENDPOINT_PAYLOAD = {
     "name": "qwen",
-    "host": "127.0.0.1",
-    "port": 8001,
+    "base_url": "http://127.0.0.1:8001/v1",
     "api_key": "secret-token",
     "request_timeout": 60,
     "max_output_length": 512,
@@ -19,9 +18,6 @@ MODEL_LISTING = {"data": [{"id": "Qwen3-32B"}, {"id": "another-model"}]}
 RESPONSE_FIELDS = {
     "id",
     "name",
-    "host",
-    "port",
-    "use_https",
     "base_url",
     "model_name",
     "has_api_key",
@@ -106,10 +102,6 @@ async def test_response_exposes_exactly_the_agreed_fields(client: httpx.AsyncCli
     assert listed.json()[0].keys() == RESPONSE_FIELDS
     assert fetched.json() == created.json()
     assert created.json()["is_active"] is True
-    assert created.json()["host"] == "127.0.0.1"
-    assert created.json()["port"] == 8001
-    assert created.json()["use_https"] is False
-    # Derived, not asked for: the user gave a host and a port.
     assert created.json()["base_url"] == "http://127.0.0.1:8001/v1"
 
 
@@ -154,12 +146,11 @@ async def test_names_are_unique_per_owner_only(client_factory: ClientFactory) ->
 @pytest.mark.parametrize(
     "override",
     [
-        {"host": ""},
-        {"host": "   "},
-        {"host": "http://127.0.0.1"},
-        {"host": "127.0.0.1:8001"},
-        {"port": 0},
-        {"port": 70000},
+        {"base_url": ""},
+        {"base_url": "   "},
+        {"base_url": "127.0.0.1:8001"},
+        {"base_url": "ftp://127.0.0.1:8001/v1"},
+        {"base_url": "http:///v1"},
         {"request_timeout": 0},
         {"request_timeout": 601},
         {"max_output_length": 0},
@@ -187,7 +178,7 @@ async def test_model_name_is_detected_from_the_service(client: httpx.AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_detection_asks_the_service_with_the_stored_key(
+async def test_detection_asks_the_service_with_the_given_key(
     api_app: FastAPI,
     client: httpx.AsyncClient,
 ) -> None:
@@ -237,17 +228,6 @@ async def test_testing_the_connection_refreshes_the_detected_model(
 
 
 @pytest.mark.asyncio
-async def test_https_endpoints_are_supported(client: httpx.AsyncClient) -> None:
-    created = await client.post(
-        "/api/models", json={**ENDPOINT_PAYLOAD, "host": "api.example.com", "port": 443,
-                             "use_https": True}
-    )
-
-    assert created.json()["base_url"] == "https://api.example.com:443/v1"
-    assert created.json()["use_https"] is True
-
-
-@pytest.mark.asyncio
 async def test_a_blank_name_falls_back_to_the_address(client: httpx.AsyncClient) -> None:
     payload = {key: value for key, value in ENDPOINT_PAYLOAD.items() if key != "name"}
 
@@ -255,6 +235,64 @@ async def test_a_blank_name_falls_back_to_the_address(client: httpx.AsyncClient)
 
     assert created.status_code == 201
     assert created.json()["name"] == "127.0.0.1:8001"
+
+
+@pytest.mark.asyncio
+async def test_an_address_can_be_probed_before_it_is_saved(
+    api_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    """The form's probe button runs before an endpoint exists to test."""
+    requests = serve_model_listing(api_app)
+
+    probe = await client.post(
+        "/api/models/probe",
+        json={"base_url": "http://127.0.0.1:8001/v1", "api_key": "secret-token"},
+    )
+
+    assert probe.status_code == 200
+    assert probe.json()["ok"] is True
+    assert probe.json()["models"] == ["Qwen3-32B", "another-model"]
+    assert str(requests[-1].url) == "http://127.0.0.1:8001/v1/models"
+    assert requests[-1].headers["authorization"] == "Bearer secret-token"
+    assert "secret-token" not in probe.text
+    # Probing stores nothing.
+    assert (await client.get("/api/models")).json() == []
+
+
+@pytest.mark.asyncio
+async def test_probing_an_unreachable_address_is_a_result_not_a_failure(
+    api_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    install_probe_transport(api_app, refuse)
+
+    probe = await client.post(
+        "/api/models/probe", json={"base_url": "http://127.0.0.1:9999/v1"}
+    )
+
+    assert probe.status_code == 200
+    assert probe.json()["ok"] is False
+    assert probe.json()["models"] == []
+
+
+@pytest.mark.asyncio
+async def test_probing_rejects_an_address_that_is_not_a_url(client: httpx.AsyncClient) -> None:
+    assert (
+        await client.post("/api/models/probe", json={"base_url": "not-a-url"})
+    ).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_probing_requires_authentication(anonymous_client: httpx.AsyncClient) -> None:
+    response = await anonymous_client.post(
+        "/api/models/probe", json={"base_url": "http://127.0.0.1:8001/v1"}
+    )
+
+    assert response.status_code == 401
 
 
 @pytest.mark.asyncio
