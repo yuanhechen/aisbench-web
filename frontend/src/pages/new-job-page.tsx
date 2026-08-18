@@ -42,7 +42,6 @@ interface FormState {
   dumpExtractRate: boolean;
   // performance
   requestRate: string;
-  stream: boolean;
   visualization: boolean;
   pressure: boolean;
   pressureTime: string;
@@ -72,7 +71,6 @@ const INITIAL: FormState = {
   mergeDatasets: false,
   dumpExtractRate: false,
   requestRate: "",
-  stream: true,
   visualization: false,
   pressure: false,
   pressureTime: "",
@@ -113,7 +111,9 @@ export function NewJobPage() {
   );
   const modeUnsupported = selectedDataset !== null && availableConfigs.length === 0;
   const selectedConfig =
-    availableConfigs.find((config) => config.name === form.configName) ?? availableConfigs[0];
+    availableConfigs.find((config) => config.name === form.configName) ??
+    availableConfigs.find((config) => config.name === selectedDataset?.default_config) ??
+    availableConfigs[0];
 
   const ready =
     form.modelEndpointId !== "" && selectedDataset !== null && !modeUnsupported && !submitting;
@@ -155,7 +155,6 @@ export function NewJobPage() {
           }
         : {
             request_rate: optionalNumber(form.requestRate),
-            stream: form.stream,
             visualization: form.visualization,
             pressure: form.pressure,
             pressure_time: optionalNumber(form.pressureTime),
@@ -311,16 +310,13 @@ export function NewJobPage() {
                   {config.name}
                   {"\u2003"}
                   {describeConfig(config)}
+                  {config.name === selectedDataset?.default_config
+                    ? `\u2003${t("newJob.configDefault")}`
+                    : ""}
                 </option>
               ))}
             </select>
-            {selectedConfig !== undefined && (
-              <p className="field-hint">
-                {selectedConfig.alias_of !== ""
-                  ? t("newJob.configAlias").replace("{name}", selectedConfig.alias_of)
-                  : t("newJob.configHint")}
-              </p>
-            )}
+            <p className="field-hint">{t("newJob.configHint")}</p>
           </>
         )}
       </section>
@@ -407,14 +403,6 @@ export function NewJobPage() {
                 />
               )}
             </div>
-            <label className="checkbox-option">
-              <input
-                type="checkbox"
-                checked={form.stream}
-                onChange={(event) => update("stream", event.target.checked)}
-              />
-              <span>{t("newJob.stream")}</span>
-            </label>
             <label className="checkbox-option">
               <input
                 type="checkbox"
@@ -525,9 +513,6 @@ export function NewJobPage() {
  * name is the only thing that identifies which one AISBench will run.
  */
 function describeConfig(config: DatasetConfig): string {
-  if (config.alias_of !== "") {
-    return `= ${config.alias_of}`;
-  }
   const parts: string[] = [];
   if (config.method !== "") {
     parts.push(config.method);

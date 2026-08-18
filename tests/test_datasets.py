@@ -103,12 +103,14 @@ def test_catalog_separates_accuracy_and_performance_variants(aisbench_configs: P
     entries = {entry.id: entry for entry in load_catalog()}
 
     gsm8k = entries["gsm8k"]
+    # gsm8k_gen aliases gsm8k_gen_4_shot_cot_chat_prompt, so it is folded into it rather
+    # than offered as a second way to run the same thing.
     assert [config.name for config in gsm8k.configs_for("accuracy")] == [
-        "gsm8k_gen",
         "gsm8k_gen_0_shot_cot_str",
         "gsm8k_gen_4_shot_cot_chat_prompt",
         "gsm8k_ppl_0_shot_str",
     ]
+    assert gsm8k.default_config_name("accuracy") == "gsm8k_gen_4_shot_cot_chat_prompt"
     assert [config.name for config in gsm8k.configs_for("performance")] == [
         "gsm8k_gen_0_shot_cot_str_perf"
     ]
@@ -492,13 +494,17 @@ def test_configs_that_differ_only_by_method_stay_distinct(aisbench_configs: Path
     assert len({config.name for config in gsm8k.configs}) == len(gsm8k.configs)
 
 
-def test_the_shortcut_config_aisbench_ships_is_offered(aisbench_configs: Path) -> None:
-    """`<name>_gen.py` re-exports another config and the CLI accepts it by name."""
+def test_the_shortcut_config_marks_a_default_rather_than_duplicating_a_run(
+    aisbench_configs: Path,
+) -> None:
+    """`<name>_gen.py` re-exports another config, so listing both offers one run twice."""
     gsm8k = next(entry for entry in load_catalog() if entry.id == "gsm8k")
     alias = next(config for config in gsm8k.configs if config.name == "gsm8k_gen")
 
     assert alias.alias_of == "gsm8k_gen_4_shot_cot_chat_prompt"
-    assert alias.symbol == "gsm8k_datasets"
+    offered = [config.name for config in gsm8k.configs_for("accuracy")]
+    assert "gsm8k_gen" not in offered
+    assert alias.alias_of in offered
 
 
 def test_a_bare_shot_count_is_read_too(aisbench_configs: Path) -> None:

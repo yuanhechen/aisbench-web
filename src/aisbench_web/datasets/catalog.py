@@ -54,7 +54,24 @@ class CatalogEntry:
         return self.download is not None
 
     def configs_for(self, mode: str) -> tuple[DatasetConfig, ...]:
-        return tuple(config for config in self.configs if config.mode == mode)
+        """Configs for one mode, with any alias folded into the config it runs.
+
+        AISBench's `<name>_gen.py` shortcut re-exports another config in the same directory.
+        Listing both offers the identical run twice, so the alias only marks its target as
+        the default.
+        """
+        listed = tuple(config for config in self.configs if config.mode == mode)
+        aliased = {config.alias_of for config in listed if config.alias_of}
+        return tuple(
+            config for config in listed if not config.alias_of or config.alias_of not in aliased
+        )
+
+    def default_config_name(self, mode: str) -> str:
+        """The config AISBench's own shortcut points at, when it ships one."""
+        for config in self.configs:
+            if config.mode == mode and config.alias_of:
+                return config.alias_of
+        return ""
 
     def default_config(self, mode: str) -> DatasetConfig | None:
         candidates = self.configs_for(mode)

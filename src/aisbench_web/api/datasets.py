@@ -38,6 +38,8 @@ class DatasetResponse(BaseModel):
     name: str
     description: str
     config_name: str
+    #: The config AISBench's own shortcut points at, when it ships one.
+    default_config: str
     category: str
     task: str
     configs: list[DatasetConfigResponse]
@@ -54,6 +56,9 @@ class DatasetResponse(BaseModel):
             name=dataset.name,
             description=dataset.description,
             config_name=dataset.config_name,
+            default_config=""
+            if entry is None
+            else (entry.default_config_name("accuracy") or entry.default_config_name("performance")),
             category=dataset.category,
             task=dataset.task,
             configs=[
@@ -66,7 +71,11 @@ class DatasetResponse(BaseModel):
                     chat_prompt=config.chat_prompt,
                     alias_of=config.alias_of,
                 )
-                for config in (() if entry is None else entry.configs)
+                for config in (
+                    ()
+                    if entry is None
+                    else (*entry.configs_for("accuracy"), *entry.configs_for("performance"))
+                )
             ],
             status=dataset.status,
             local_path=dataset.local_path,

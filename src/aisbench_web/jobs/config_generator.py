@@ -132,7 +132,7 @@ def render_config(
         raise ValueError(f"unknown job mode: {mode!r}")
     dataset_import = _checked_import(dataset_import, pattern=DOTTED_PATH, label="module")
     dataset_symbol = _checked_import(dataset_symbol, pattern=IDENTIFIER, label="symbol")
-    model_import = _checked_import(
+    chosen_import = _checked_import(
         model_import or MODEL_IMPORTS[mode], pattern=DOTTED_PATH, label="module"
     )
 
@@ -146,7 +146,7 @@ def render_config(
         "",
         "with read_base():",
         f"    from {dataset_import} import {dataset_symbol} as datasets",
-        f"    from {model_import} import models",
+        f"    from {chosen_import} import models",
         f"    from {SUMMARIZER_IMPORTS[mode]} import summarizer",
         "",
         "models[0].update(",
@@ -158,9 +158,12 @@ def render_config(
         f"    url={service_url!r},",
         f"    enable_ssl={(parsed.scheme == 'https')!r},",
         f"    max_out_len={endpoint.max_output_length!r},",
-        f"    stream={bool(parameters.get('stream', mode == PERFORMANCE))!r},",
         f"    request_rate={parameters.get('request_rate') or 0!r},",
     ]
+    # The chosen model config already states whether it streams; overwriting that would make
+    # the choice between two configs of the same class produce identical files.
+    if model_import is None:
+        lines.append(f"    stream={mode == PERFORMANCE!r},")
     if parameters.get("batch_size") is not None:
         lines.append(f"    batch_size={int(parameters['batch_size'])!r},")
     if parameters.get("retry") is not None:

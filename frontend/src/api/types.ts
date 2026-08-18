@@ -22,6 +22,7 @@ export interface Dataset {
   name: string;
   description: string;
   config_name: string;
+  default_config: string;
   category: string;
   task: string;
   configs: DatasetConfig[];

@@ -416,3 +416,53 @@ def test_generated_config_imports_only_verified_modules(mode: str) -> None:
     assert imported
     for module in imported:
         assert module.startswith(VERIFIED_IMPORT_ROOTS), module
+
+
+def test_a_chosen_model_config_keeps_its_own_streaming_setting() -> None:
+    """Two configs of one class can differ only by stream; overwriting it erases the choice."""
+    chosen = render_config(
+        mode="performance",
+        dataset_import=GSM8K_PERFORMANCE_IMPORT,
+        dataset_symbol="gsm8k_datasets",
+        endpoint=endpoint_snapshot(),
+        parameters={},
+        model_import="ais_bench.benchmark.configs.models.vllm_api.vllm_api_general_chat",
+    )
+
+    assert "stream=" not in chosen
+    assert "vllm_api_general_chat import models" in chosen
+
+
+def test_the_default_model_config_still_streams_for_performance() -> None:
+    source = render_config(
+        mode="performance",
+        dataset_import=GSM8K_PERFORMANCE_IMPORT,
+        dataset_symbol="gsm8k_datasets",
+        endpoint=endpoint_snapshot(),
+        parameters={},
+    )
+
+    assert model_update_kwargs(source)["stream"] is True
+
+
+def test_two_model_configs_of_one_class_still_produce_different_files() -> None:
+    """They differ only by stream. Overwriting it made the choice change nothing at all."""
+    base = {
+        "mode": "performance",
+        "dataset_import": GSM8K_PERFORMANCE_IMPORT,
+        "dataset_symbol": "gsm8k_datasets",
+        "endpoint": endpoint_snapshot(),
+        "parameters": {},
+    }
+    general = render_config(
+        **base,
+        model_import="ais_bench.benchmark.configs.models.vllm_api.vllm_api_general_chat",
+    )
+    streaming = render_config(
+        **base,
+        model_import="ais_bench.benchmark.configs.models.vllm_api.vllm_api_stream_chat",
+    )
+
+    assert general != streaming
+    assert "vllm_api_general_chat import models" in general
+    assert "vllm_api_stream_chat import models" in streaming
