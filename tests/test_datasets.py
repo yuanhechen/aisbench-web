@@ -70,6 +70,8 @@ def test_packaged_catalog_declares_every_field_the_service_needs() -> None:
     for entry in entries:
         assert entry.name and entry.description and entry.relative_data_path
         assert entry.accuracy_config
+        assert entry.dataset_symbol.endswith("_datasets")
+        assert entry.config_package
         assert not Path(entry.relative_data_path).is_absolute()
         assert ".." not in Path(entry.relative_data_path).parts
 
@@ -78,6 +80,11 @@ def test_catalog_matches_the_verified_aisbench_layout() -> None:
     by_id = {entry.id: entry for entry in load_catalog()}
 
     assert by_id["gsm8k"].accuracy_config == "gsm8k_gen_4_shot_cot_chat_prompt"
+    assert by_id["gsm8k"].config_import_for("accuracy") == (
+        "ais_bench.benchmark.configs.datasets.gsm8k.gsm8k_gen_4_shot_cot_chat_prompt"
+    )
+    assert by_id["gsm8k"].dataset_symbol == "gsm8k_datasets"
+    assert by_id["mmlu"].config_import_for("performance") is None
     assert by_id["gsm8k"].performance_config == "gsm8k_gen_0_shot_cot_str_perf"
     assert by_id["ceval"].relative_data_path == "ceval/formal_ceval"
     # The installed AISBench ships no mmlu *_perf config, so performance must stay unavailable.

@@ -19,11 +19,16 @@ CATALOG_RESOURCE = "catalog.json"
 STALE_PART_AGE_SECONDS = 24 * 60 * 60
 
 
+DATASET_CONFIG_ROOT = "ais_bench.benchmark.configs.datasets"
+
+
 @dataclass(frozen=True)
 class CatalogEntry:
     id: str
     name: str
     description: str
+    config_package: str
+    dataset_symbol: str
     accuracy_config: str
     performance_config: str | None
     relative_data_path: str
@@ -34,6 +39,16 @@ class CatalogEntry:
     @property
     def can_install(self) -> bool:
         return self.download_url is not None
+
+    def config_for(self, mode: str) -> str | None:
+        return self.accuracy_config if mode == "accuracy" else self.performance_config
+
+    def config_import_for(self, mode: str) -> str | None:
+        """Build the dotted import the generator may interpolate, or None for an unsupported mode."""
+        config = self.config_for(mode)
+        if config is None:
+            return None
+        return f"{DATASET_CONFIG_ROOT}.{self.config_package}.{config}"
 
     def replace(self, **changes: object) -> "CatalogEntry":
         return replace(self, **changes)
@@ -47,6 +62,8 @@ def _validated_entry(raw: dict) -> CatalogEntry:
         id=raw["id"],
         name=raw["name"],
         description=raw["description"],
+        config_package=raw["config_package"],
+        dataset_symbol=raw["dataset_symbol"],
         accuracy_config=raw["accuracy_config"],
         performance_config=raw.get("performance_config"),
         relative_data_path=raw["relative_data_path"],
