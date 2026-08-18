@@ -19,23 +19,39 @@ const GSM8K_CONFIGS = [
   {
     name: "gsm8k_gen_4_shot_cot_chat_prompt",
     mode: "accuracy",
+    method: "gen",
     shots: 4,
     chain_of_thought: true,
     chat_prompt: true,
+    alias_of: "",
   },
   {
     name: "gsm8k_gen_0_shot_cot_str",
     mode: "accuracy",
+    method: "gen",
     shots: 0,
     chain_of_thought: true,
     chat_prompt: false,
+    alias_of: "",
+  },
+  // Same shots, same prompt style, different evaluation method.
+  {
+    name: "gsm8k_ppl_0_shot_str",
+    mode: "accuracy",
+    method: "ppl",
+    shots: 0,
+    chain_of_thought: false,
+    chat_prompt: false,
+    alias_of: "",
   },
   {
     name: "gsm8k_gen_0_shot_cot_str_perf",
     mode: "performance",
+    method: "gen",
     shots: 0,
     chain_of_thought: true,
     chat_prompt: false,
+    alias_of: "",
   },
 ];
 const GSM8K = {
@@ -64,9 +80,11 @@ const MMLU = {
     {
       name: "mmlu_gen_5_shot_chat_prompt",
       mode: "accuracy",
+      method: "gen",
       shots: 5,
       chain_of_thought: false,
       chat_prompt: true,
+      alias_of: "",
     },
   ],
 };
@@ -141,13 +159,19 @@ describe("new evaluation", () => {
     await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
 
     const configs = screen.getByLabelText("评测配置");
-    // Named for what the config actually does, with the file name kept underneath.
-    expect(within(configs).getByRole("option", { name: "4-shot · CoT · chat" })).toBeInTheDocument();
+    // AISBench's own file name identifies the option; attributes only annotate it.
     expect(
-      within(configs).getByRole("option", { name: "0-shot · CoT · completion" }),
+      within(configs).getByRole("option", { name: /^gsm8k_gen_4_shot_cot_chat_prompt/ }),
+    ).toBeInTheDocument();
+    // Two configs that share every derived attribute must remain separately selectable.
+    expect(
+      within(configs).getByRole("option", { name: /^gsm8k_gen_0_shot_cot_str/ }),
+    ).toBeInTheDocument();
+    expect(
+      within(configs).getByRole("option", { name: /^gsm8k_ppl_0_shot_str/ }),
     ).toBeInTheDocument();
     // The performance variant belongs to the other mode.
-    expect(within(configs).queryAllByRole("option")).toHaveLength(2);
+    expect(within(configs).queryAllByRole("option")).toHaveLength(3);
 
     await user.click(screen.getByRole("radio", { name: "性能评测" }));
     expect(within(screen.getByLabelText("评测配置")).queryAllByRole("option")).toHaveLength(1);

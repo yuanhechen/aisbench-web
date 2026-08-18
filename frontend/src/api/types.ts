@@ -10,9 +10,11 @@ export interface ModelEndpoint {
 export interface DatasetConfig {
   name: string;
   mode: "accuracy" | "performance";
+  method: string;
   shots: number | null;
   chain_of_thought: boolean;
   chat_prompt: boolean;
+  alias_of: string;
 }
 
 export interface Dataset {

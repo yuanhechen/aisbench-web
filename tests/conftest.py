@@ -36,10 +36,18 @@ FAKE_DATASET_CONFIGS = {
         "gsm8k_gen_4_shot_cot_chat_prompt",
         "gsm8k_gen_0_shot_cot_str",
         "gsm8k_gen_0_shot_cot_str_perf",
+        # Two configs that differ only by evaluation method, as several real datasets do.
+        "gsm8k_ppl_0_shot_str",
     ]),
     "mmlu": ("mmlu", ["mmlu_gen_5_shot_chat_prompt"]),
     "synthetic": ("synthetic", ["synthetic_gen_string", "synthetic_gen_string_perf"]),
 }
+ALIAS_CONFIG = """\
+from mmengine.config import read_base
+
+with read_base():
+    from .{target} import {symbol}
+"""
 
 
 @pytest.fixture
@@ -57,6 +65,11 @@ def aisbench_configs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
                 ),
                 encoding="utf-8",
             )
+        # AISBench ships a <name>_gen.py shortcut that re-exports one of the configs.
+        (directory / f"{dataset}_gen.py").write_text(
+            ALIAS_CONFIG.format(target=configs[0], symbol=f"{dataset}_datasets"),
+            encoding="utf-8",
+        )
     monkeypatch.setenv("AISBENCH_CONFIGS_PACKAGE", str(package))
     return package
 

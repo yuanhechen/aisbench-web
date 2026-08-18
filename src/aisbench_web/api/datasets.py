@@ -19,13 +19,18 @@ router = APIRouter(prefix="/api/datasets")
 
 
 class DatasetConfigResponse(BaseModel):
-    """One AISBench config file: a specific way of running this dataset."""
+    """One AISBench config file: a specific way of running this dataset.
+
+    `name` is the identity the CLI uses; the rest is read off it for display only.
+    """
 
     name: str
     mode: str
+    method: str
     shots: int | None
     chain_of_thought: bool
     chat_prompt: bool
+    alias_of: str
 
 
 class DatasetResponse(BaseModel):
@@ -55,9 +60,11 @@ class DatasetResponse(BaseModel):
                 DatasetConfigResponse(
                     name=config.name,
                     mode=config.mode,
+                    method=config.method,
                     shots=config.shots,
                     chain_of_thought=config.chain_of_thought,
                     chat_prompt=config.chat_prompt,
+                    alias_of=config.alias_of,
                 )
                 for config in (() if entry is None else entry.configs)
             ],

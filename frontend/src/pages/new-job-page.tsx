@@ -271,11 +271,19 @@ export function NewJobPage() {
             >
               {availableConfigs.map((config) => (
                 <option key={config.name} value={config.name}>
+                  {config.name}
+                  {"\u2003"}
                   {describeConfig(config)}
                 </option>
               ))}
             </select>
-            <p className="field-hint">{selectedConfig?.name}</p>
+            {selectedConfig !== undefined && (
+              <p className="field-hint">
+                {selectedConfig.alias_of !== ""
+                  ? t("newJob.configAlias").replace("{name}", selectedConfig.alias_of)
+                  : t("newJob.configHint")}
+              </p>
+            )}
           </>
         )}
       </section>
@@ -473,13 +481,26 @@ export function NewJobPage() {
   );
 }
 
-/** Read a config file name back as the options it encodes. */
+/**
+ * Attributes read off a config file name, for display beside it.
+ *
+ * Never in place of it: several configs in one dataset can share every attribute, so the file
+ * name is the only thing that identifies which one AISBench will run.
+ */
 function describeConfig(config: DatasetConfig): string {
+  if (config.alias_of !== "") {
+    return `= ${config.alias_of}`;
+  }
   const parts: string[] = [];
+  if (config.method !== "") {
+    parts.push(config.method);
+  }
   if (config.shots !== null) {
     parts.push(`${config.shots}-shot`);
   }
-  parts.push(config.chain_of_thought ? "CoT" : "non-CoT");
+  if (config.chain_of_thought) {
+    parts.push("CoT");
+  }
   parts.push(config.chat_prompt ? "chat" : "completion");
   return parts.join(" · ");
 }

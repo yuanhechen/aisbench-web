@@ -104,8 +104,10 @@ def test_catalog_separates_accuracy_and_performance_variants(aisbench_configs: P
 
     gsm8k = entries["gsm8k"]
     assert [config.name for config in gsm8k.configs_for("accuracy")] == [
+        "gsm8k_gen",
         "gsm8k_gen_0_shot_cot_str",
         "gsm8k_gen_4_shot_cot_chat_prompt",
+        "gsm8k_ppl_0_shot_str",
     ]
     assert [config.name for config in gsm8k.configs_for("performance")] == [
         "gsm8k_gen_0_shot_cot_str_perf"
@@ -477,3 +479,31 @@ async def test_shared_datasets_cannot_be_deleted_through_the_api(
     client: httpx.AsyncClient,
 ) -> None:
     assert (await client.delete("/api/datasets/gsm8k")).status_code == 405
+
+
+def test_configs_that_differ_only_by_method_stay_distinct(aisbench_configs: Path) -> None:
+    """gen and ppl are different evaluations; collapsing them loses which one will run."""
+    gsm8k = next(entry for entry in load_catalog() if entry.id == "gsm8k")
+    by_name = {config.name: config for config in gsm8k.configs}
+
+    assert by_name["gsm8k_gen_0_shot_cot_str"].method == "gen"
+    assert by_name["gsm8k_ppl_0_shot_str"].method == "ppl"
+    # Every config is identified by its own file name, whatever it shares with the others.
+    assert len({config.name for config in gsm8k.configs}) == len(gsm8k.configs)
+
+
+def test_the_shortcut_config_aisbench_ships_is_offered(aisbench_configs: Path) -> None:
+    """`<name>_gen.py` re-exports another config and the CLI accepts it by name."""
+    gsm8k = next(entry for entry in load_catalog() if entry.id == "gsm8k")
+    alias = next(config for config in gsm8k.configs if config.name == "gsm8k_gen")
+
+    assert alias.alias_of == "gsm8k_gen_4_shot_cot_chat_prompt"
+    assert alias.symbol == "gsm8k_datasets"
+
+
+def test_a_bare_shot_count_is_read_too(aisbench_configs: Path) -> None:
+    """Real names use both `_5_shot_` and `_5shot_`; missing one made configs look identical."""
+    from aisbench_web.datasets.scan import SHOTS
+
+    assert SHOTS.search("math_prm800k_500_5shot_cot_gen").group(1) == "5"
+    assert SHOTS.search("gsm8k_gen_4_shot_cot_chat_prompt").group(1) == "4"

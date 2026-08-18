@@ -14,15 +14,25 @@ DATASET_CONFIG_ROOT = "ais_bench.benchmark.configs.datasets"
 # `path='ais_bench/datasets/gsm8k'` or `path="ais_bench/datasets/ceval/formal_ceval"`
 DATA_PATH = re.compile(r"""path\s*=\s*['"]([^'"]*ais_bench/datasets/[^'"]*)['"]""")
 DATASET_SYMBOL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*_datasets)\s*=", re.MULTILINE)
+# `<name>_gen.py` files re-export one specific config: `from .x_gen_5_shot_str import x_datasets`.
+ALIAS_IMPORT = re.compile(
+    r"from\s+\.([A-Za-z_][A-Za-z0-9_]*)\s+import\s+([A-Za-z_][A-Za-z0-9_]*_datasets)"
+)
 DATASETS_PREFIX = "ais_bench/datasets/"
 PERFORMANCE_SUFFIX = "_perf"
-# Written for humans to read back: gsm8k_gen_4_shot_cot_chat_prompt.
-SHOTS = re.compile(r"_(\d+)_shot")
+# Written for humans to read back: gsm8k_gen_4_shot_cot_chat_prompt, math_prm800k_500_5shot_cot_gen.
+SHOTS = re.compile(r"_(\d+)_?shot")
+# AISBench evaluates either by generating an answer or by scoring options with perplexity.
+METHODS = ("gen", "ppl")
 
 
 @dataclass(frozen=True)
 class DatasetConfig:
-    """One AISBench config file: a specific way of running a dataset."""
+    """One AISBench config file: a specific way of running a dataset.
+
+    `name` is the identity. Everything else is read off that name for display and must never
+    stand in for it: several configs in one dataset can share every derived attribute.
+    """
 
     name: str
     package: str
@@ -31,6 +41,10 @@ class DatasetConfig:
     shots: int | None
     chain_of_thought: bool
     chat_prompt: bool
+    #: "gen" generates an answer, "ppl" scores options by perplexity; empty when unstated.
+    method: str = ""
+    #: The config this one re-exports, for the `<name>_gen.py` shortcut files.
+    alias_of: str = ""
 
     @property
     def import_path(self) -> str:
@@ -54,8 +68,9 @@ class ScannedDataset:
         return tuple(config for config in self.configs if config.mode == mode)
 
 
-def _describe(name: str, package: str, symbol: str) -> DatasetConfig:
+def _describe(name: str, package: str, symbol: str, alias_of: str = "") -> DatasetConfig:
     shots = SHOTS.search(name)
+    parts = name.split("_")
     return DatasetConfig(
         name=name,
         package=package,
@@ -65,6 +80,8 @@ def _describe(name: str, package: str, symbol: str) -> DatasetConfig:
         # "noncot" must not be read as containing "cot".
         chain_of_thought="_cot" in name and "_noncot" not in name,
         chat_prompt="chat" in name,
+        method=next((part for part in parts if part in METHODS), ""),
+        alias_of=alias_of,
     )
 
 
@@ -109,10 +126,16 @@ def scan_dataset_configs(ais_bench_package: Path) -> tuple[ScannedDataset, ...]:
             except OSError:
                 continue
             symbol = DATASET_SYMBOL.search(source)
-            if symbol is None:
-                # Without an exported list there is nothing a generated config could import.
+            alias = ALIAS_IMPORT.search(source)
+            if symbol is not None:
+                configs.append(_describe(config_file.stem, package_dir.name, symbol.group(1)))
+            elif alias is not None:
+                # A shortcut file the CLI accepts by name; it runs the config it re-exports.
+                configs.append(
+                    _describe(config_file.stem, package_dir.name, alias.group(2), alias.group(1))
+                )
+            else:
                 continue
-            configs.append(_describe(config_file.stem, package_dir.name, symbol.group(1)))
             paths = paths or _declared_paths(source)
         if configs:
             datasets.append(
