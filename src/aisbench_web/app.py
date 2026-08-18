@@ -2,11 +2,14 @@ import asyncio
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from ipaddress import AddressValueError, IPv4Address, IPv6Address
+from pathlib import Path
 from urllib.parse import urlsplit
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.responses import JSONResponse
 
 from aisbench_web.api.auth import router as auth_router
@@ -27,6 +30,9 @@ REG_NAME_CHARACTERS = frozenset(
 )
 HEX_DIGITS = frozenset("0123456789abcdefABCDEF")
 DEFAULT_PORTS = {"http": 80, "https": 443}
+# Built by scripts/build_frontend.py and shipped inside the wheel.
+PACKAGED_STATIC_DIR = Path(__file__).resolve().parent / "static"
+API_PREFIXES = ("api", "ws")
 
 
 def _is_valid_reg_name(host: str) -> bool:
@@ -187,6 +193,7 @@ def create_app(
     app.state.install_tasks: list[Future] = []
     app.state.worker = None
     app.state.notifier = JobNotifier()
+    app.state.static_dir = PACKAGED_STATIC_DIR
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_without_raw_inputs(
@@ -230,5 +237,23 @@ def create_app(
     app.include_router(datasets_router)
     app.include_router(results_router)
     app.include_router(jobs_router)
+
+    assets_dir = PACKAGED_STATIC_DIR / "assets"
+    if assets_dir.is_dir():
+        app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    @app.get("/{spa_path:path}", include_in_schema=False)
+    def serve_single_page_application(spa_path: str, request: Request) -> FileResponse:
+        """Serve the app for browser routes; an unknown API path stays a JSON 404."""
+        first_segment = spa_path.split("/", 1)[0]
+        if first_segment in API_PREFIXES:
+            raise HTTPException(status_code=404, detail="Not Found")
+        index = Path(getattr(request.app.state, "static_dir", PACKAGED_STATIC_DIR)) / "index.html"
+        if not index.is_file():
+            raise HTTPException(
+                status_code=404,
+                detail="the web interface is not included in this build",
+            )
+        return FileResponse(index, media_type="text/html")
 
     return app
