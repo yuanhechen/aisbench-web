@@ -98,11 +98,11 @@ describe("new evaluation", () => {
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
     await user.click(screen.getByRole("radio", { name: "性能评测" }));
     await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
-    await user.clear(screen.getByLabelText("请求数量"));
-    await user.type(screen.getByLabelText("请求数量"), "32");
+    await user.clear(screen.getByLabelText("数据条数"));
+    await user.type(screen.getByLabelText("数据条数"), "32");
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
-    expect(await screen.findByText("任务已进入队列")).toBeInTheDocument();
+    await waitFor(() => expect(submitted).not.toBeNull());
     expect(submitted).toMatchObject({
       model_endpoint_id: "model-1",
       dataset_id: "gsm8k",
@@ -129,10 +129,8 @@ describe("new evaluation", () => {
     await user.type(screen.getByLabelText("最大并行数"), "4");
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
-    await screen.findByText("任务已进入队列");
-    expect(submitted.mode).toBe("accuracy");
+    await waitFor(() => expect(submitted.mode).toBe("accuracy"));
     expect(submitted.parameters).toMatchObject({ max_num_workers: 4 });
-    expect(screen.getByText(/队列位置/)).toHaveTextContent("3");
   });
 
   it("offers the config variants AISBench ships for the chosen dataset and mode", async () => {
@@ -171,8 +169,7 @@ describe("new evaluation", () => {
     await user.selectOptions(screen.getByLabelText("评测配置"), "gsm8k_gen_0_shot_cot_str");
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
-    await screen.findByText("任务已进入队列");
-    expect(submitted.config_name).toBe("gsm8k_gen_0_shot_cot_str");
+    await waitFor(() => expect(submitted.config_name).toBe("gsm8k_gen_0_shot_cot_str"));
   });
 
   it("refuses to submit a mode the chosen dataset has no configuration for", async () => {
@@ -204,6 +201,67 @@ describe("new evaluation", () => {
     const select = await screen.findByLabelText("数据集");
     expect(within(select).getByRole("option", { name: /gsm8k/ })).toBeInTheDocument();
     expect(within(select).queryByRole("option", { name: /mmlu/ })).not.toBeInTheDocument();
+  });
+
+  it("leaves the form for the job list once the job is queued", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.post("/api/jobs", () =>
+        HttpResponse.json({ id: "j", status: "queued", queue_position: 1 }, { status: 201 }),
+      ),
+      http.get("/api/jobs", () => HttpResponse.json([])),
+    );
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await user.click(screen.getByRole("button", { name: "提交评测" }));
+
+    // The list is where a submitted job lives; staying on the form hides it.
+    expect(await screen.findByText("还没有任务。")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "提交评测" })).not.toBeInTheDocument();
+  });
+
+  it("names the job when the user gives it one", async () => {
+    const user = userEvent.setup();
+    let submitted: Record<string, unknown> = {};
+    server.use(
+      http.post("/api/jobs", async ({ request }) => {
+        submitted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ id: "j", status: "queued", queue_position: 1 }, { status: 201 });
+      }),
+    );
+    renderAt("/jobs/new");
+
+    await user.type(await screen.findByLabelText("任务名称"), "夜间基线");
+    await user.selectOptions(screen.getByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await user.click(screen.getByRole("button", { name: "提交评测" }));
+
+    await waitFor(() => expect(submitted.name).toBe("夜间基线"));
+  });
+
+  it("sends only the parameters the user filled in", async () => {
+    const user = userEvent.setup();
+    let submitted: Record<string, Record<string, unknown>> = {};
+    server.use(
+      http.post("/api/jobs", async ({ request }) => {
+        submitted = (await request.json()) as Record<string, Record<string, unknown>>;
+        return HttpResponse.json({ id: "j", status: "queued", queue_position: 1 }, { status: 201 });
+      }),
+    );
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await user.click(screen.getByRole("button", { name: "提交评测" }));
+
+    await waitFor(() => expect(submitted.parameters).toBeDefined());
+    // An untouched box must not send a value; AISBench's own default should stand.
+    expect(submitted.parameters).not.toHaveProperty("temperature");
+    expect(submitted.parameters).not.toHaveProperty("top_p");
+    expect(submitted.parameters).not.toHaveProperty("pressure_time");
+    expect(submitted.parameters).toMatchObject({ num_prompts: 8, max_num_workers: 1 });
   });
 
   it("shows the server's refusal instead of pretending the job queued", async () => {

@@ -22,30 +22,50 @@ router = APIRouter()
 LOG_CHUNK_LIMIT = 256 * 1024
 JOB_NOT_FOUND = "job not found"
 DEFAULT_MAX_OUTPUT_LENGTH = 512
+JOB_NAME_MAX_LENGTH = 200
 ACCURACY = "accuracy"
 PERFORMANCE = "performance"
 
 
-class AccuracyParameters(BaseModel):
+class CommonParameters(BaseModel):
+    """Options every mode accepts, named as AISBench names them."""
+
     num_prompts: int | None = Field(default=None, ge=1, le=1_000_000)
     max_num_workers: int = Field(default=1, ge=1, le=128)
+    max_workers_per_gpu: int | None = Field(default=None, ge=1, le=128)
+    num_warmups: int | None = Field(default=None, ge=0, le=1000)
     max_output_length: int | None = Field(default=None, ge=1, le=131072)
-    detailed_scoring: bool = False
+    batch_size: int | None = Field(default=None, ge=1, le=4096)
+    retry: int | None = Field(default=None, ge=0, le=20)
+    # Merged straight into the OpenAI request body by the model class.
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    top_p: float | None = Field(default=None, gt=0, le=1)
+    top_k: int | None = Field(default=None, ge=-1, le=1000)
+    seed: int | None = Field(default=None, ge=0)
+    repetition_penalty: float | None = Field(default=None, gt=0, le=10)
+    ignore_eos: bool | None = None
 
 
-class PerformanceParameters(BaseModel):
-    num_prompts: int | None = Field(default=None, ge=1, le=1_000_000)
-    concurrency: int | None = Field(default=None, ge=1, le=4096)
+class AccuracyParameters(CommonParameters):
+    dump_eval_details: bool = False
+    merge_datasets: bool = False
+    dump_extract_rate: bool = False
+
+
+class PerformanceParameters(CommonParameters):
     request_rate: float | None = Field(default=None, ge=0, le=100_000)
-    max_output_length: int | None = Field(default=None, ge=1, le=131072)
     stream: bool = True
     visualization: bool = False
+    pressure: bool = False
+    pressure_time: int | None = Field(default=None, ge=1, le=86400)
+    spec_decode: bool = False
 
 
 PARAMETER_MODELS = {ACCURACY: AccuracyParameters, PERFORMANCE: PerformanceParameters}
 
 
 class JobCreate(BaseModel):
+    name: str = Field(default="", max_length=JOB_NAME_MAX_LENGTH)
     model_endpoint_id: str
     dataset_id: str
     mode: Literal["accuracy", "performance"]
@@ -73,6 +93,7 @@ class JobProgress(BaseModel):
 
 class JobResponse(BaseModel):
     id: str
+    name: str
     mode: str
     status: str
     queue_position: int | None
@@ -116,6 +137,7 @@ def _to_response(job: Job, repository: JobRepository) -> JobResponse:
     ahead = repository.queue_position(job.id)
     return JobResponse(
         id=job.id,
+        name=job.name,
         mode=job.mode,
         status=job.status,
         # 1-based: the user's own job is position 1 when nothing is ahead of it.
@@ -206,6 +228,7 @@ def create_job(
     encrypted = endpoints.get_encrypted_api_key_for_owner(user.id, endpoint.id)
     job = repository.create(
         owner_id=user.id,
+        name=payload.name.strip() or f"{dataset.name} · {config.name}",
         model_endpoint_id=endpoint.id,
         dataset_id=dataset.id,
         mode=payload.mode,

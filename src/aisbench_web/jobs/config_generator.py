@@ -24,11 +24,58 @@ PERFORMANCE_VISUALIZATION_MODE = "perf_viz"
 
 DEFAULT_MAX_NUM_WORKERS = 1
 
+# Options AISBench reads from its own command line. Passing them here rather than editing the
+# config keeps the generated file to the three imports and one update it needs.
+COUNTED_CLI_OPTIONS = (
+    ("max_num_workers", "--max-num-workers"),
+    ("max_workers_per_gpu", "--max-workers-per-gpu"),
+    ("num_prompts", "--num-prompts"),
+    ("num_warmups", "--num-warmups"),
+    ("pressure_time", "--pressure-time"),
+)
+FLAG_CLI_OPTIONS = (
+    ("dump_eval_details", "--dump-eval-details"),
+    ("merge_datasets", "--merge-ds"),
+    ("dump_extract_rate", "--dump-extract-rate"),
+    ("pressure", "--pressure"),
+    ("spec_decode", "--spec-decode"),
+)
+# Sampling options are merged straight into the OpenAI request body by the model class.
+GENERATION_OPTIONS = (
+    "temperature",
+    "top_p",
+    "top_k",
+    "seed",
+    "repetition_penalty",
+    "ignore_eos",
+)
+
 
 def cli_arguments_for(parameters: dict) -> list[str]:
     """Options AISBench reads from its own command line rather than from the config."""
-    workers = int(parameters.get("max_num_workers") or DEFAULT_MAX_NUM_WORKERS)
-    return ["--max-num-workers", str(workers)]
+    arguments: list[str] = [
+        "--max-num-workers",
+        str(int(parameters.get("max_num_workers") or DEFAULT_MAX_NUM_WORKERS)),
+    ]
+    for key, option in COUNTED_CLI_OPTIONS:
+        if key == "max_num_workers":
+            continue
+        value = parameters.get(key)
+        if value is not None:
+            arguments += [option, str(int(value))]
+    for key, option in FLAG_CLI_OPTIONS:
+        if parameters.get(key):
+            arguments.append(option)
+    return arguments
+
+
+def _generation_kwargs(parameters: dict) -> dict:
+    """Only the sampling options the user actually set; the rest stay at AISBench's defaults."""
+    return {
+        key: parameters[key]
+        for key in GENERATION_OPTIONS
+        if parameters.get(key) is not None
+    }
 
 
 @dataclass(frozen=True)
@@ -106,15 +153,19 @@ def render_config(
         f"    enable_ssl={(parsed.scheme == 'https')!r},",
         f"    max_out_len={endpoint.max_output_length!r},",
         f"    stream={bool(parameters.get('stream', mode == PERFORMANCE))!r},",
-        f"    request_rate={parameters.get('request_rate', 0)!r},",
-        ")",
-        "",
+        f"    request_rate={parameters.get('request_rate') or 0!r},",
     ]
-
-    num_prompts = parameters.get("num_prompts")
-    if num_prompts is not None:
-        lines.append(f"datasets[0]['reader_cfg']['test_range'] = {f'[0:{int(num_prompts)}]'!r}")
-        lines.append("")
+    if parameters.get("batch_size") is not None:
+        lines.append(f"    batch_size={int(parameters['batch_size'])!r},")
+    if parameters.get("retry") is not None:
+        lines.append(f"    retry={int(parameters['retry'])!r},")
+    generation = _generation_kwargs(parameters)
+    if generation:
+        rendered = ", ".join(f"{key}={value!r}" for key, value in sorted(generation.items()))
+        lines.append(f"    generation_kwargs=dict({rendered}),")
+    lines += [")", ""]
+    # num_prompts is not written here: AISBench's own --num-prompts sets exactly this
+    # dataset reader range, and the CLI is the documented way to ask for it.
 
     # No `infer` block on purpose. Without one AISBench builds the partitioner, runner, and
     # task itself, and picks the API inference task for a service model. Naming those internals

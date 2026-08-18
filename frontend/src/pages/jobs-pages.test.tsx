@@ -14,6 +14,7 @@ const ALICE = { id: "u1", username: "alice" };
 
 const JOB = {
   id: "job-1",
+  name: "GSM8K 精度基线",
   mode: "accuracy",
   status: "running",
   queue_position: null,
@@ -58,7 +59,7 @@ describe("job detail", () => {
     const fake = installFakeWebSocket();
     renderDetail();
 
-    expect(await screen.findByText("512 / 800")).toBeInTheDocument();
+    expect(await screen.findByText(/512 \/ 800/)).toBeInTheDocument();
     await waitFor(() => expect(fake.sockets).toHaveLength(1));
     fake.sockets[0].open();
     fake.sockets[0].emitJson({ type: "log", offset: 120 });
@@ -80,9 +81,72 @@ describe("job detail", () => {
     const fake = installFakeWebSocket();
     renderDetail();
 
-    expect(await screen.findByText("512 / 800")).toBeInTheDocument();
+    expect(await screen.findByText(/512 \/ 800/)).toBeInTheDocument();
     expect(await screen.findByText(/restored line/)).toBeInTheDocument();
     expect(screen.getByText("运行中")).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("keeps a running job current without any socket event", async () => {
+    let progress = { completed: 2, total: 8 };
+    let logOffset = 0;
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, progress })),
+      http.get("/api/jobs/job-1/logs", () => {
+        const text = logOffset === 0 ? "first line\n" : "second line\n";
+        logOffset += 10;
+        return HttpResponse.json({ offset: logOffset, text });
+      }),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    expect(await screen.findByText(/2 \/ 8/)).toBeInTheDocument();
+    // No socket event is emitted; the page must still follow the job.
+    progress = { completed: 8, total: 8 };
+
+    expect(await screen.findByText(/8 \/ 8/, {}, { timeout: 6000 })).toBeInTheDocument();
+    expect(await screen.findByText(/second line/, {}, { timeout: 6000 })).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("stops polling once the job has finished", async () => {
+    let requests = 0;
+    server.use(
+      http.get("/api/jobs/job-1", () => {
+        requests += 1;
+        return HttpResponse.json({ ...JOB, status: "succeeded" });
+      }),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    await screen.findByText("已成功");
+    const settled = requests;
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
+    // A finished job cannot change; polling it forever is pure noise.
+    expect(requests).toBe(settled);
+    fake.restore();
+  });
+
+  it("leaves out a model name the endpoint never detected", async () => {
+    server.use(
+      http.get("/api/jobs/job-1", () =>
+        HttpResponse.json({ ...JOB, model: { ...JOB.model, model_name: "" } }),
+      ),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    const subtitle = await screen.findByText(/精度评测/);
+    expect(subtitle).toHaveTextContent("精度评测 · GSM8K");
+    // A trailing separator with nothing after it reads as a rendering fault.
+    expect(subtitle.textContent?.trimEnd().endsWith("·")).toBe(false);
     fake.restore();
   });
 
@@ -233,19 +297,25 @@ describe("job list", () => {
       http.get("/api/jobs", () =>
         HttpResponse.json([
           JOB,
-          { ...JOB, id: "job-2", status: "succeeded", dataset: { id: "mmlu", name: "MMLU" } },
+          {
+            ...JOB,
+            id: "job-2",
+            name: "MMLU 任务",
+            status: "succeeded",
+            dataset: { id: "mmlu", name: "MMLU" },
+          },
         ]),
       ),
     );
     render(<App initialUser={ALICE} initialPath="/jobs" />);
 
-    expect(await screen.findByRole("link", { name: "GSM8K" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "MMLU" })).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "GSM8K 精度基线" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "MMLU 任务" })).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText("状态筛选"), "succeeded");
 
-    expect(screen.queryByRole("link", { name: "GSM8K" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "MMLU" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "GSM8K 精度基线" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "MMLU 任务" })).toBeInTheDocument();
   });
 
   it("uses a flat table with no metric cards", async () => {
@@ -253,7 +323,7 @@ describe("job list", () => {
     render(<App initialUser={ALICE} initialPath="/jobs" />);
 
     const table = await screen.findByRole("table");
-    expect(within(table).getByRole("link", { name: "GSM8K" })).toBeInTheDocument();
+    expect(within(table).getByRole("link", { name: "GSM8K 精度基线" })).toBeInTheDocument();
     // Scoped to the table: the same word is also a filter option.
     expect(within(table).getByText("运行中")).toBeInTheDocument();
   });

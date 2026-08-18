@@ -649,3 +649,44 @@ select.input {
   font-size: 12px;
   padding: 1px 8px;
 }
+
+.progress {
+  max-width: 420px;
+}
+
+.progress-track {
+  background: var(--line);
+  border-radius: 999px;
+  height: 4px;
+  margin-top: 6px;
+  overflow: hidden;
+}
+
+.progress-fill {
+  background: var(--accent);
+  height: 100%;
+}
+
+.live-dot {
+  background: var(--accent);
+  border-radius: 50%;
+  display: inline-block;
+  height: 6px;
+  margin-left: 6px;
+  vertical-align: middle;
+  width: 6px;
+}
+
+.advanced {
+  margin-top: 14px;
+}
+
+.advanced summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.advanced > .field-grid {
+  margin-top: 10px;
+}

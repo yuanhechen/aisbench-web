@@ -12,6 +12,10 @@ interface LogChunk {
   text: string;
 }
 
+// A socket only speeds this up. Polling is what guarantees a running job stays current when
+// the socket never connects, which is what happens behind some proxies.
+const ACTIVE_POLL_MS = 2000;
+
 /** Live events only nudge the page; every value shown is fetched over REST. */
 function eventSocketUrl(jobId: string): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -28,6 +32,8 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   const [cancelling, setCancelling] = useState(false);
   // The last byte the server confirmed; a reconnect resumes from here, never from zero.
   const offsetRef = useRef(0);
+  const logRef = useRef<HTMLPreElement>(null);
+  const pinnedRef = useRef(true);
 
   const refreshJob = useCallback(async () => {
     try {
@@ -45,6 +51,10 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
         `/api/jobs/${jobId}/logs?offset=${offsetRef.current}`,
       );
       if (chunk.text !== "") {
+        const view = logRef.current;
+        // Follow the tail only while the reader is already at the bottom.
+        pinnedRef.current =
+          view === null || view.scrollTop + view.clientHeight >= view.scrollHeight - 24;
         offsetRef.current = chunk.offset;
         setLog((current) => current + chunk.text);
       }
@@ -60,6 +70,19 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
     void pullLog();
   }, [jobId, refreshJob, pullLog]);
 
+  const active = job !== null && ACTIVE_STATUSES.includes(job.status);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+    const timer = setInterval(() => {
+      void refreshJob();
+      void pullLog();
+    }, ACTIVE_POLL_MS);
+    return () => clearInterval(timer);
+  }, [active, refreshJob, pullLog]);
+
   useEffect(() => {
     const socket = new WebSocket(eventSocketUrl(jobId));
     const handleMessage = () => {
@@ -73,6 +96,12 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
       socket.close();
     };
   }, [jobId, refreshJob, pullLog]);
+
+  useEffect(() => {
+    if (pinnedRef.current && logRef.current !== null) {
+      logRef.current.scrollTop = logRef.current.scrollHeight;
+    }
+  }, [log]);
 
   async function cancel() {
     setCancelling(true);
@@ -101,16 +130,22 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
     );
   }
 
-  const cancellable = ACTIVE_STATUSES.includes(job.status);
+  const cancellable = active;
 
   return (
     <div className="task-view">
       <header className="task-context">
         <div className="task-context-main">
-          <h1 className="workspace-title">{job.dataset.name}</h1>
+          <h1 className="workspace-title">{job.name === "" ? job.dataset.name : job.name}</h1>
           <p className="workspace-subtitle">
-            {job.mode === "accuracy" ? t("newJob.accuracy") : t("newJob.performance")} ·{" "}
-            {job.model.model_name}
+            {/* An endpoint whose model was never detected has no name to print. */}
+            {[
+              job.mode === "accuracy" ? t("newJob.accuracy") : t("newJob.performance"),
+              job.dataset.name,
+              job.model.model_name,
+            ]
+              .filter((part) => part !== "")
+              .join(" · ")}
           </p>
         </div>
         <StatusLabel status={job.status} />
@@ -147,9 +182,23 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
           </p>
         )}
         {job.progress !== null && (
-          <p className="progress-line">
-            {job.progress.completed} / {job.progress.total}
-          </p>
+          <div className="progress">
+            <div className="progress-line">
+              {t("jobDetail.progress")} {job.progress.completed} / {job.progress.total}
+              {job.progress.total > 0 &&
+                ` · ${Math.round((job.progress.completed / job.progress.total) * 100)}%`}
+            </div>
+            {job.progress.total > 0 && (
+              <div className="progress-track">
+                <div
+                  className="progress-fill"
+                  style={{
+                    width: `${Math.min(100, (job.progress.completed / job.progress.total) * 100)}%`,
+                  }}
+                />
+              </div>
+            )}
+          </div>
         )}
         {job.error_message !== null && (
           <p className="form-error" role="alert">
@@ -161,8 +210,13 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
       {job.status === "succeeded" && <JobResults jobId={jobId} />}
 
       <section className="task-block">
-        <h2 className="form-step-title">{t("jobDetail.log")}</h2>
-        <pre className="log-view">{log}</pre>
+        <h2 className="form-step-title">
+          {t("jobDetail.log")}
+          {active && <span className="live-dot" aria-label={t("jobDetail.live")} />}
+        </h2>
+        <pre className="log-view" ref={logRef}>
+          {log === "" ? t("jobDetail.noLogYet") : log}
+        </pre>
       </section>
 
       {cancellable && (

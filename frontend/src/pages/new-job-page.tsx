@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import type { FormEvent } from "react";
 
 import { api } from "../api/client";
@@ -11,31 +12,63 @@ import { PageHeader } from "../components/page-header";
 type Mode = "accuracy" | "performance";
 
 interface FormState {
+  name: string;
   modelEndpointId: string;
   datasetId: string;
   configName: string;
   mode: Mode;
   numPrompts: string;
   maxNumWorkers: string;
+  maxWorkersPerGpu: string;
+  numWarmups: string;
   maxOutputLength: string;
-  detailedScoring: boolean;
-  concurrency: string;
+  batchSize: string;
+  retry: string;
+  temperature: string;
+  topP: string;
+  topK: string;
+  seed: string;
+  repetitionPenalty: string;
+  // accuracy
+  dumpEvalDetails: boolean;
+  mergeDatasets: boolean;
+  dumpExtractRate: boolean;
+  // performance
+  requestRate: string;
   stream: boolean;
   visualization: boolean;
+  pressure: boolean;
+  pressureTime: string;
+  specDecode: boolean;
 }
 
 const INITIAL: FormState = {
+  name: "",
   modelEndpointId: "",
   datasetId: "",
   configName: "",
   mode: "accuracy",
   numPrompts: "8",
   maxNumWorkers: "1",
+  maxWorkersPerGpu: "",
+  numWarmups: "",
   maxOutputLength: "512",
-  detailedScoring: false,
-  concurrency: "1",
+  batchSize: "",
+  retry: "",
+  temperature: "",
+  topP: "",
+  topK: "",
+  seed: "",
+  repetitionPenalty: "",
+  dumpEvalDetails: false,
+  mergeDatasets: false,
+  dumpExtractRate: false,
+  requestRate: "",
   stream: true,
   visualization: false,
+  pressure: false,
+  pressureTime: "",
+  specDecode: false,
 };
 
 function optionalNumber(value: string): number | undefined {
@@ -50,6 +83,7 @@ export function NewJobPage() {
   const datasets = useApiQuery<Dataset[]>("/api/datasets", { onFailure: reportFailure });
   const [form, setForm] = useState<FormState>(INITIAL);
   const [queued, setQueued] = useState<Job | null>(null);
+  const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -86,21 +120,39 @@ export function NewJobPage() {
   }
 
   function parameters(): Record<string, unknown> {
-    if (form.mode === "accuracy") {
-      return {
-        num_prompts: optionalNumber(form.numPrompts),
-        max_num_workers: optionalNumber(form.maxNumWorkers),
-        max_output_length: optionalNumber(form.maxOutputLength),
-        detailed_scoring: form.detailedScoring,
-      };
-    }
-    return {
+    // Only what the user actually set; anything blank stays at AISBench's own default.
+    const common = {
       num_prompts: optionalNumber(form.numPrompts),
-      concurrency: optionalNumber(form.concurrency),
+      max_num_workers: optionalNumber(form.maxNumWorkers),
+      max_workers_per_gpu: optionalNumber(form.maxWorkersPerGpu),
+      num_warmups: optionalNumber(form.numWarmups),
       max_output_length: optionalNumber(form.maxOutputLength),
-      stream: form.stream,
-      visualization: form.visualization,
+      batch_size: optionalNumber(form.batchSize),
+      retry: optionalNumber(form.retry),
+      temperature: optionalNumber(form.temperature),
+      top_p: optionalNumber(form.topP),
+      top_k: optionalNumber(form.topK),
+      seed: optionalNumber(form.seed),
+      repetition_penalty: optionalNumber(form.repetitionPenalty),
     };
+    const specific =
+      form.mode === "accuracy"
+        ? {
+            dump_eval_details: form.dumpEvalDetails,
+            merge_datasets: form.mergeDatasets,
+            dump_extract_rate: form.dumpExtractRate,
+          }
+        : {
+            request_rate: optionalNumber(form.requestRate),
+            stream: form.stream,
+            visualization: form.visualization,
+            pressure: form.pressure,
+            pressure_time: optionalNumber(form.pressureTime),
+            spec_decode: form.specDecode,
+          };
+    return Object.fromEntries(
+      Object.entries({ ...common, ...specific }).filter(([, value]) => value !== undefined),
+    );
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -108,15 +160,17 @@ export function NewJobPage() {
     setError(null);
     setSubmitting(true);
     try {
-      setQueued(
-        await api.post<Job>("/api/jobs", {
-          model_endpoint_id: form.modelEndpointId,
-          dataset_id: form.datasetId,
-          mode: form.mode,
-          config_name: selectedConfig?.name ?? null,
-          parameters: parameters(),
-        }),
-      );
+      const created = await api.post<Job>("/api/jobs", {
+        name: form.name,
+        model_endpoint_id: form.modelEndpointId,
+        dataset_id: form.datasetId,
+        mode: form.mode,
+        config_name: selectedConfig?.name ?? null,
+        parameters: parameters(),
+      });
+      setQueued(created);
+      // The form's work is done; the job now lives in the list.
+      navigate("/jobs");
     } catch (failure) {
       reportFailure(failure);
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -131,6 +185,18 @@ export function NewJobPage() {
 
       <section className="form-step">
         <h2 className="form-step-title">{t("newJob.stepModel")}</h2>
+        <label className="field" htmlFor="job-name">
+          {t("newJob.name")}
+        </label>
+        <input
+          id="job-name"
+          className="input"
+          type="text"
+          placeholder={t("newJob.namePlaceholder")}
+          value={form.name}
+          onChange={(event) => update("name", event.target.value)}
+        />
+
         <label className="field" htmlFor="job-model">
           {t("newJob.modelEndpoint")}
         </label>
@@ -219,43 +285,83 @@ export function NewJobPage() {
         <div className="field-grid">
           <NumberField
             id="job-num-prompts"
-            label={form.mode === "accuracy" ? t("newJob.numPrompts") : t("newJob.requestCount")}
+            label={t("newJob.numPrompts")}
+            hint={t("newJob.numPromptsHint")}
             value={form.numPrompts}
             onChange={(value) => update("numPrompts", value)}
           />
-          {form.mode === "accuracy" ? (
-            <NumberField
-              id="job-workers"
-              label={t("newJob.maxWorkers")}
-              value={form.maxNumWorkers}
-              onChange={(value) => update("maxNumWorkers", value)}
-            />
-          ) : (
-            <NumberField
-              id="job-concurrency"
-              label={t("newJob.concurrency")}
-              value={form.concurrency}
-              onChange={(value) => update("concurrency", value)}
-            />
-          )}
+          <NumberField
+            id="job-workers"
+            label={t("newJob.maxWorkers")}
+            value={form.maxNumWorkers}
+            onChange={(value) => update("maxNumWorkers", value)}
+          />
           <NumberField
             id="job-max-output"
             label={t("newJob.maxOutputLength")}
             value={form.maxOutputLength}
             onChange={(value) => update("maxOutputLength", value)}
           />
+          <NumberField
+            id="job-batch-size"
+            label={t("newJob.batchSize")}
+            value={form.batchSize}
+            onChange={(value) => update("batchSize", value)}
+          />
         </div>
+
         {form.mode === "accuracy" ? (
-          <label className="checkbox-option">
-            <input
-              type="checkbox"
-              checked={form.detailedScoring}
-              onChange={(event) => update("detailedScoring", event.target.checked)}
-            />
-            <span>{t("newJob.detailedScoring")}</span>
-          </label>
+          <>
+            <label className="checkbox-option">
+              <input
+                type="checkbox"
+                checked={form.dumpEvalDetails}
+                onChange={(event) => update("dumpEvalDetails", event.target.checked)}
+              />
+              <span>{t("newJob.dumpEvalDetails")}</span>
+            </label>
+            <label className="checkbox-option">
+              <input
+                type="checkbox"
+                checked={form.mergeDatasets}
+                onChange={(event) => update("mergeDatasets", event.target.checked)}
+              />
+              <span>{t("newJob.mergeDatasets")}</span>
+            </label>
+            <label className="checkbox-option">
+              <input
+                type="checkbox"
+                checked={form.dumpExtractRate}
+                onChange={(event) => update("dumpExtractRate", event.target.checked)}
+              />
+              <span>{t("newJob.dumpExtractRate")}</span>
+            </label>
+          </>
         ) : (
           <>
+            <div className="field-grid">
+              <NumberField
+                id="job-request-rate"
+                label={t("newJob.requestRate")}
+                hint={t("newJob.requestRateHint")}
+                value={form.requestRate}
+                onChange={(value) => update("requestRate", value)}
+              />
+              <NumberField
+                id="job-warmups"
+                label={t("newJob.numWarmups")}
+                value={form.numWarmups}
+                onChange={(value) => update("numWarmups", value)}
+              />
+              {form.pressure && (
+                <NumberField
+                  id="job-pressure-time"
+                  label={t("newJob.pressureTime")}
+                  value={form.pressureTime}
+                  onChange={(value) => update("pressureTime", value)}
+                />
+              )}
+            </div>
             <label className="checkbox-option">
               <input
                 type="checkbox"
@@ -267,6 +373,22 @@ export function NewJobPage() {
             <label className="checkbox-option">
               <input
                 type="checkbox"
+                checked={form.pressure}
+                onChange={(event) => update("pressure", event.target.checked)}
+              />
+              <span>{t("newJob.pressure")}</span>
+            </label>
+            <label className="checkbox-option">
+              <input
+                type="checkbox"
+                checked={form.specDecode}
+                onChange={(event) => update("specDecode", event.target.checked)}
+              />
+              <span>{t("newJob.specDecode")}</span>
+            </label>
+            <label className="checkbox-option">
+              <input
+                type="checkbox"
                 checked={form.visualization}
                 onChange={(event) => update("visualization", event.target.checked)}
               />
@@ -274,6 +396,55 @@ export function NewJobPage() {
             </label>
           </>
         )}
+
+        <details className="advanced">
+          <summary>{t("newJob.sampling")}</summary>
+          <p className="field-hint">{t("newJob.samplingHint")}</p>
+          <div className="field-grid">
+            <NumberField
+              id="job-temperature"
+              label="temperature"
+              value={form.temperature}
+              onChange={(value) => update("temperature", value)}
+            />
+            <NumberField
+              id="job-top-p"
+              label="top_p"
+              value={form.topP}
+              onChange={(value) => update("topP", value)}
+            />
+            <NumberField
+              id="job-top-k"
+              label="top_k"
+              value={form.topK}
+              onChange={(value) => update("topK", value)}
+            />
+            <NumberField
+              id="job-seed"
+              label="seed"
+              value={form.seed}
+              onChange={(value) => update("seed", value)}
+            />
+            <NumberField
+              id="job-repetition-penalty"
+              label="repetition_penalty"
+              value={form.repetitionPenalty}
+              onChange={(value) => update("repetitionPenalty", value)}
+            />
+            <NumberField
+              id="job-retry"
+              label={t("newJob.retry")}
+              value={form.retry}
+              onChange={(value) => update("retry", value)}
+            />
+            <NumberField
+              id="job-workers-per-gpu"
+              label={t("newJob.maxWorkersPerGpu")}
+              value={form.maxWorkersPerGpu}
+              onChange={(value) => update("maxWorkersPerGpu", value)}
+            />
+          </div>
+        </details>
       </section>
 
       <section className="form-step">
@@ -316,11 +487,13 @@ function describeConfig(config: DatasetConfig): string {
 function NumberField({
   id,
   label,
+  hint,
   value,
   onChange,
 }: {
   id: string;
   label: string;
+  hint?: string;
   value: string;
   onChange: (value: string) => void;
 }) {
@@ -336,6 +509,7 @@ function NumberField({
         value={value}
         onChange={(event) => onChange(event.target.value)}
       />
+      {hint !== undefined && <p className="field-hint">{hint}</p>}
     </div>
   );
 }

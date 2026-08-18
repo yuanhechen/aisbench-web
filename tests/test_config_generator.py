@@ -46,10 +46,15 @@ def model_update_kwargs(source: str) -> dict:
             and isinstance(node.func, ast.Attribute)
             and node.func.attr == "update"
         ):
-            return {
-                keyword.arg: ast.literal_eval(keyword.value) for keyword in node.keywords
-            }
+            return {keyword.arg: _value_of(keyword.value) for keyword in node.keywords}
     raise AssertionError("generated config has no models[0].update(...) call")
+
+
+def _value_of(node: ast.expr):
+    """Read a literal, or a dict(...) call, which is the idiom AISBench configs use."""
+    if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "dict":
+        return {keyword.arg: _value_of(keyword.value) for keyword in node.keywords}
+    return ast.literal_eval(node)
 
 
 # --- plan contracts ----------------------------------------------------------
@@ -70,7 +75,6 @@ def test_accuracy_config_uses_manifest_imports_and_escaped_values(tmp_path: Path
     source = output.read_text(encoding="utf-8")
     compile(source, str(output), "exec")
     assert "gsm8k_datasets" in source
-    assert "test_range" in source
     assert "api_key" in source
 
 
@@ -283,15 +287,76 @@ def test_untrusted_dataset_symbols_are_refused() -> None:
 # --- parameters --------------------------------------------------------------
 
 
-def test_num_prompts_limits_the_dataset_and_is_omitted_when_unset() -> None:
-    limited = render_config(
+def test_num_prompts_travels_on_the_command_line() -> None:
+    """AISBench's --num-prompts sets exactly the dataset reader range this used to edit."""
+    source = render_config(
         mode="accuracy",
         dataset_import=GSM8K_ACCURACY_IMPORT,
         dataset_symbol="gsm8k_datasets",
         endpoint=endpoint_snapshot(),
         parameters={"num_prompts": 8},
     )
-    unlimited = render_config(
+
+    assert "test_range" not in source
+    assert cli_arguments_for({"num_prompts": 8}) == [
+        "--max-num-workers",
+        "1",
+        "--num-prompts",
+        "8",
+    ]
+
+
+def test_every_documented_option_reaches_the_command_line() -> None:
+    arguments = cli_arguments_for(
+        {
+            "max_num_workers": 4,
+            "max_workers_per_gpu": 2,
+            "num_prompts": 8,
+            "num_warmups": 0,
+            "pressure": True,
+            "pressure_time": 30,
+            "spec_decode": True,
+            "dump_eval_details": True,
+            "merge_datasets": True,
+            "dump_extract_rate": True,
+        }
+    )
+
+    assert arguments == [
+        "--max-num-workers", "4",
+        "--max-workers-per-gpu", "2",
+        "--num-prompts", "8",
+        "--num-warmups", "0",
+        "--pressure-time", "30",
+        "--dump-eval-details",
+        "--merge-ds",
+        "--dump-extract-rate",
+        "--pressure",
+        "--spec-decode",
+    ]
+    # An option the user did not set stays at whatever AISBench defaults to.
+    assert cli_arguments_for({}) == ["--max-num-workers", "1"]
+
+
+def test_sampling_options_reach_the_request_body() -> None:
+    """generation_kwargs is merged straight into the OpenAI request by the model class."""
+    source = render_config(
+        mode="accuracy",
+        dataset_import=GSM8K_ACCURACY_IMPORT,
+        dataset_symbol="gsm8k_datasets",
+        endpoint=endpoint_snapshot(),
+        parameters={"temperature": 0.7, "top_p": 0.95, "seed": 42, "batch_size": 8, "retry": 3},
+    )
+
+    compile(source, "<generated>", "exec")
+    kwargs = model_update_kwargs(source)
+    assert kwargs["generation_kwargs"] == {"seed": 42, "temperature": 0.7, "top_p": 0.95}
+    assert kwargs["batch_size"] == 8
+    assert kwargs["retry"] == 3
+
+
+def test_untouched_sampling_options_are_left_out_entirely() -> None:
+    source = render_config(
         mode="accuracy",
         dataset_import=GSM8K_ACCURACY_IMPORT,
         dataset_symbol="gsm8k_datasets",
@@ -299,8 +364,8 @@ def test_num_prompts_limits_the_dataset_and_is_omitted_when_unset() -> None:
         parameters={},
     )
 
-    assert "'[0:8]'" in limited
-    assert "test_range" not in unlimited
+    assert "generation_kwargs" not in source
+    assert "batch_size" not in source
 
 
 def test_worker_count_travels_on_the_command_line_not_in_the_config() -> None:

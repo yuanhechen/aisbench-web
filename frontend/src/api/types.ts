@@ -39,6 +39,7 @@ export interface ProbeResult {
 
 export interface Job {
   id: string;
+  name: string;
   mode: string;
   status: string;
   queue_position: number | null;

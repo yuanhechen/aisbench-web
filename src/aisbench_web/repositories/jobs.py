@@ -19,7 +19,7 @@ OUTPUTS_DIRNAME = "outputs"
 UPDATABLE_COLUMNS = ("pid", "exit_code", "error_code", "error_message")
 
 SELECTED_COLUMNS = (
-    "id, owner_id, model_endpoint_id, dataset_id, mode, status, model_snapshot_json, "
+    "id, owner_id, name, model_endpoint_id, dataset_id, mode, status, model_snapshot_json, "
     "dataset_snapshot_json, parameters_json, config_path, output_dir, log_path, pid, "
     "exit_code, error_code, error_message, created_at, started_at, finished_at, "
     "progress_completed, progress_total"
@@ -47,6 +47,7 @@ class StoredArtifact:
 class Job:
     id: str
     owner_id: str
+    name: str
     model_endpoint_id: str
     dataset_id: str
     mode: str
@@ -84,6 +85,7 @@ class JobRepository:
         parameters: dict,
         model_snapshot: dict,
         dataset_snapshot: dict,
+        name: str = "",
         now: datetime | None = None,
     ) -> Job:
         job_id = str(uuid4())
@@ -93,6 +95,7 @@ class JobRepository:
         job = Job(
             id=job_id,
             owner_id=owner_id,
+            name=name,
             model_endpoint_id=model_endpoint_id,
             dataset_id=dataset_id,
             mode=mode,
@@ -115,14 +118,15 @@ class JobRepository:
             connection.execute(
                 """
                 INSERT INTO jobs (
-                  id, owner_id, model_endpoint_id, dataset_id, mode, status,
+                  id, owner_id, name, model_endpoint_id, dataset_id, mode, status,
                   model_snapshot_json, dataset_snapshot_json, parameters_json,
                   config_path, output_dir, log_path, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job.id,
                     job.owner_id,
+                    job.name,
                     job.model_endpoint_id,
                     job.dataset_id,
                     job.mode,
@@ -402,6 +406,7 @@ class JobRepository:
         return Job(
             id=row["id"],
             owner_id=row["owner_id"],
+            name=row["name"],
             model_endpoint_id=row["model_endpoint_id"],
             dataset_id=row["dataset_id"],
             mode=row["mode"],

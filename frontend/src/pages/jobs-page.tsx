@@ -71,6 +71,7 @@ export function JobsPage() {
         <table className="data-table">
           <thead>
             <tr>
+              <th>{t("jobs.name")}</th>
               <th>{t("jobs.dataset")}</th>
               <th>{t("jobs.mode")}</th>
               <th>{t("jobs.model")}</th>
@@ -82,8 +83,11 @@ export function JobsPage() {
             {visible.map((job) => (
               <tr key={job.id}>
                 <td>
-                  <Link to={`/jobs/${job.id}`}>{job.dataset.name}</Link>
+                  <Link to={`/jobs/${job.id}`}>
+                    {job.name === "" ? job.dataset.name : job.name}
+                  </Link>
                 </td>
+                <td className="mono">{job.dataset.name}</td>
                 <td>{job.mode === "accuracy" ? t("newJob.accuracy") : t("newJob.performance")}</td>
                 <td className="mono">{job.model.model_name}</td>
                 <td>

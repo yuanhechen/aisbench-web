@@ -155,9 +155,17 @@ async def test_performance_parameters_are_validated_separately(owner) -> None:
     good = await submit(
         owner,
         mode="performance",
-        parameters={"num_prompts": 32, "concurrency": 4, "stream": True, "visualization": True},
+        parameters={
+            "num_prompts": 32,
+            "batch_size": 4,
+            "stream": True,
+            "visualization": True,
+            "pressure": True,
+            "pressure_time": 30,
+            "temperature": 0.7,
+        },
     )
-    bad = await submit(owner, mode="performance", parameters={"num_prompts": 32, "concurrency": 0})
+    bad = await submit(owner, mode="performance", parameters={"num_prompts": 32, "pressure_time": 0})
 
     assert good.status_code == 201
     assert bad.status_code == 422

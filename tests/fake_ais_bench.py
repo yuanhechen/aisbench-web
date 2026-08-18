@@ -21,7 +21,17 @@ def parse_args(argv=None):
     parser.add_argument("config")
     parser.add_argument("--mode", default="all")
     parser.add_argument("--work-dir", required=True)
+    # Mirrors the real CLI: an option it accepts must not make the stand-in exit 2.
     parser.add_argument("--max-num-workers", type=int, default=1)
+    parser.add_argument("--max-workers-per-gpu", type=int, default=1)
+    parser.add_argument("--num-prompts", type=int)
+    parser.add_argument("--num-warmups", type=int)
+    parser.add_argument("--pressure-time", type=int)
+    parser.add_argument("--pressure", action="store_true")
+    parser.add_argument("--spec-decode", action="store_true")
+    parser.add_argument("--merge-ds", action="store_true")
+    parser.add_argument("--dump-eval-details", action="store_true")
+    parser.add_argument("--dump-extract-rate", action="store_true")
     parser.add_argument(
         "--scenario",
         default=os.environ.get("FAKE_AIS_BENCH_SCENARIO", "success"),

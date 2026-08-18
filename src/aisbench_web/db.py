@@ -167,7 +167,10 @@ MIGRATION_5 = ("ALTER TABLE datasets ADD COLUMN category TEXT NOT NULL DEFAULT '
 # The documentation also prints a task type per dataset; it is shown and searched.
 MIGRATION_6 = ("ALTER TABLE datasets ADD COLUMN task TEXT NOT NULL DEFAULT ''",)
 
-LATEST_SCHEMA_VERSION = 6
+# A job needs a name a person chose, not only the dataset it happened to use.
+MIGRATION_7 = ("ALTER TABLE jobs ADD COLUMN name TEXT NOT NULL DEFAULT ''",)
+
+LATEST_SCHEMA_VERSION = 7
 
 
 class Database:
@@ -226,6 +229,7 @@ class Database:
                 (4, self._apply_migration_4),
                 (5, self._apply_migration_5),
                 (6, self._apply_migration_6),
+                (7, self._apply_migration_7),
             )
             pending = [(version, apply) for version, apply in migrations if version not in applied]
             if not pending:
@@ -248,6 +252,11 @@ class Database:
     @staticmethod
     def _apply_migration_1(connection: sqlite3.Connection) -> None:
         for statement in MIGRATION_1:
+            connection.execute(statement)
+
+    @staticmethod
+    def _apply_migration_7(connection: sqlite3.Connection) -> None:
+        for statement in MIGRATION_7:
             connection.execute(statement)
 
     @staticmethod

@@ -232,7 +232,7 @@ def test_the_worker_passes_the_requested_worker_count_to_the_cli(harness: Harnes
 
     harness.worker.run_pending_once()
 
-    assert seen == [["--max-num-workers", "3"]]
+    assert seen == [["--max-num-workers", "3", "--num-prompts", "8"]]
 
 
 # --- execution ---------------------------------------------------------------
