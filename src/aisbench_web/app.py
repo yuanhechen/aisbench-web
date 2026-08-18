@@ -8,6 +8,7 @@ from urllib.parse import urlsplit
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.responses import JSONResponse
@@ -33,6 +34,9 @@ DEFAULT_PORTS = {"http": 80, "https": 443}
 # Built by scripts/build_frontend.py and shipped inside the wheel.
 PACKAGED_STATIC_DIR = Path(__file__).resolve().parent / "static"
 API_PREFIXES = ("api", "ws")
+# Asset filenames carry a content hash, so a cached copy can never be stale.
+IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable"
+ASSETS_PREFIX = "/assets/"
 
 
 def _is_valid_reg_name(host: str) -> bool:
@@ -155,7 +159,10 @@ def create_app(
     *,
     settings: Settings,
     start_worker: bool = True,
+    static_dir: Path | None = None,
 ) -> FastAPI:
+    """Build the service. `static_dir` overrides the packaged interface, for tests."""
+    web_root = PACKAGED_STATIC_DIR if static_dir is None else Path(static_dir)
     database = Database(settings.db_path)
 
     @asynccontextmanager
@@ -193,7 +200,7 @@ def create_app(
     app.state.install_tasks: list[Future] = []
     app.state.worker = None
     app.state.notifier = JobNotifier()
-    app.state.static_dir = PACKAGED_STATIC_DIR
+    app.state.static_dir = web_root
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_without_raw_inputs(
@@ -207,6 +214,17 @@ def create_app(
             status_code=422,
             content={"detail": jsonable_encoder(errors)},
         )
+
+    # The interface is often served over a slow link; the bundle compresses about three to
+    # one, which is the difference between a fast page and a page that feels stuck.
+    app.add_middleware(GZipMiddleware, minimum_size=1024)
+
+    @app.middleware("http")
+    async def cache_hashed_assets(request: Request, call_next):
+        response = await call_next(request)
+        if request.url.path.startswith(ASSETS_PREFIX) and response.status_code == 200:
+            response.headers["Cache-Control"] = IMMUTABLE_CACHE_CONTROL
+        return response
 
     @app.middleware("http")
     async def require_same_origin_for_api_mutations(request: Request, call_next):
@@ -238,17 +256,17 @@ def create_app(
     app.include_router(results_router)
     app.include_router(jobs_router)
 
-    assets_dir = PACKAGED_STATIC_DIR / "assets"
+    assets_dir = web_root / "assets"
     if assets_dir.is_dir():
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-    @app.get("/{spa_path:path}", include_in_schema=False)
+    @app.api_route("/{spa_path:path}", methods=["GET", "HEAD"], include_in_schema=False)
     def serve_single_page_application(spa_path: str, request: Request) -> FileResponse:
         """Serve the app for browser routes; an unknown API path stays a JSON 404."""
         first_segment = spa_path.split("/", 1)[0]
         if first_segment in API_PREFIXES:
             raise HTTPException(status_code=404, detail="Not Found")
-        index = Path(getattr(request.app.state, "static_dir", PACKAGED_STATIC_DIR)) / "index.html"
+        index = Path(request.app.state.static_dir) / "index.html"
         if not index.is_file():
             raise HTTPException(
                 status_code=404,

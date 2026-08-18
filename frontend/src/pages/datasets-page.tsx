@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { api } from "../api/client";
 import type { Dataset } from "../api/types";
@@ -8,7 +8,7 @@ import { useI18n } from "../i18n/i18n-context";
 import type { MessageKey } from "../i18n/messages";
 import { PageHeader } from "../components/page-header";
 
-const POLL_MS = 1000;
+const POLL_MS = 1500;
 
 const STATUS_LABELS: Record<Dataset["status"], MessageKey> = {
   not_installed: "datasets.notInstalled",
@@ -21,16 +21,19 @@ const STATUS_LABELS: Record<Dataset["status"], MessageKey> = {
 export function DatasetsPage() {
   const { t } = useI18n();
   const { reportFailure } = useAuth();
-  // Installs run in the background on the server, so the shared rows are polled.
-  const datasets = useApiQuery<Dataset[]>("/api/datasets", {
-    pollMs: POLL_MS,
-    onFailure: reportFailure,
-  });
   const [installing, setInstalling] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
+  const [watching, setWatching] = useState(false);
+  // Installs run in the background on the server, so the shared rows are polled -- but only
+  // while one is actually running. A settled catalog does not change on its own.
+  const datasets = useApiQuery<Dataset[]>("/api/datasets", {
+    pollMs: watching ? POLL_MS : undefined,
+    onFailure: reportFailure,
+  });
 
   async function install(dataset: Dataset) {
     setInstalling((current) => ({ ...current, [dataset.id]: true }));
+    setWatching(true);
     setError(null);
     try {
       await api.post(`/api/datasets/${dataset.id}/install`);
@@ -38,13 +41,23 @@ export function DatasetsPage() {
       reportFailure(failure);
       setError(failure instanceof Error ? failure.message : String(failure));
       setInstalling((current) => ({ ...current, [dataset.id]: false }));
+      setWatching(false);
     }
   }
 
+  useEffect(() => {
+    const running = (datasets.data ?? []).some((dataset) => dataset.status === "installing");
+    const claimed = Object.values(installing).some(Boolean);
+    if (watching && !running && !claimed) {
+      setWatching(false);
+    }
+  }, [datasets.data, installing, watching]);
+
   function statusOf(dataset: Dataset): Dataset["status"] {
-    return installing[dataset.id] && dataset.status === "not_installed"
-      ? "installing"
-      : dataset.status;
+    if (dataset.status === "available" || dataset.status === "failed") {
+      return dataset.status;
+    }
+    return installing[dataset.id] ? "installing" : dataset.status;
   }
 
   return (

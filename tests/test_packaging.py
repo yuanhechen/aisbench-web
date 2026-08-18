@@ -7,22 +7,24 @@ import httpx
 import pytest
 from fastapi import FastAPI
 
-from aisbench_web.app import PACKAGED_STATIC_DIR
+from aisbench_web.app import PACKAGED_STATIC_DIR, create_app
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 INDEX_MARKER = '<div id="root"></div>'
 
 
 @pytest.fixture
-def built_app(api_app: FastAPI, tmp_path: Path) -> FastAPI:
-    """Point the app at a stand-in build so routing is tested without running npm."""
+def built_app(settings, tmp_path: Path) -> FastAPI:
+    """Build the app against a stand-in interface, so static serving is exercised for real."""
     static = tmp_path / "static"
     (static / "assets").mkdir(parents=True)
     (static / "index.html").write_text(
         f"<!doctype html><html><body>{INDEX_MARKER}</body></html>", encoding="utf-8"
     )
-    api_app.state.static_dir = static
-    return api_app
+    (static / "assets" / "index.js").write_text(
+        "const compressible = 'x';\n" * 400, encoding="utf-8"
+    )
+    return create_app(settings=settings, start_worker=False, static_dir=static)
 
 
 @pytest.mark.asyncio
@@ -54,6 +56,29 @@ async def test_unknown_api_paths_stay_json_and_never_return_the_app(built_app: F
             assert response.status_code == 404, path
             assert INDEX_MARKER not in response.text
             assert response.headers["content-type"].startswith("application/json")
+
+
+@pytest.mark.asyncio
+async def test_the_interface_is_compressed_and_its_assets_are_cacheable(
+    built_app: FastAPI,
+) -> None:
+    """Served over a slow link, an uncompressed bundle is the difference users feel."""
+    async with (
+        built_app.router.lifespan_context(built_app),
+        httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=built_app),
+            base_url="http://testserver",
+        ) as client,
+    ):
+        response = await client.get("/assets/index.js", headers={"Accept-Encoding": "gzip"})
+        head = await client.head("/jobs/new")
+
+    assert response.status_code == 200
+    assert response.headers["content-encoding"] == "gzip"
+    # Hashed filenames cannot go stale, so a cached copy needs no revalidation.
+    assert "immutable" in response.headers["cache-control"]
+    # A HEAD on a browser route used to be refused with 405.
+    assert head.status_code == 200
 
 
 @pytest.mark.asyncio
