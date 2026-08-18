@@ -8,8 +8,8 @@
       "performance_config": "gsm8k_gen_0_shot_cot_str_perf",
       "relative_data_path": "gsm8k",
       "download_url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/gsm8k.zip",
-      "sha256": null,
-      "size_bytes": null
+      "sha256": "5e90449bd5ed9c728dd32fc0c36a21c2cb02fd1fe38cb00fcf5672fcf3dc9378",
+      "size_bytes": 3409276
     },
     {
       "id": "ceval",

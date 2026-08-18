@@ -1,3 +1,4 @@
+import hashlib
 import io
 import os
 import tarfile
@@ -45,6 +46,12 @@ class _FakeUsage:
         self.used = 0
 
 
+def gsm8k_entry_for(payload: bytes):
+    """Repin the packaged GSM8K entry at a synthetic payload so verification still runs."""
+    entry = next(entry for entry in load_catalog() if entry.id == "gsm8k")
+    return entry.replace(sha256=hashlib.sha256(payload).hexdigest(), size_bytes=len(payload))
+
+
 def build_zip(entries: dict[str, str]) -> bytes:
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w") as archive:
@@ -75,6 +82,15 @@ def test_catalog_matches_the_verified_aisbench_layout() -> None:
     assert by_id["ceval"].relative_data_path == "ceval/formal_ceval"
     # The installed AISBench ships no mmlu *_perf config, so performance must stay unavailable.
     assert by_id["mmlu"].performance_config is None
+
+
+def test_installable_entries_carry_a_verified_checksum() -> None:
+    """An entry that can install must be verifiable; an unpinned download is a silent swap."""
+    for entry in load_catalog():
+        if entry.download_url is None:
+            continue
+        assert entry.sha256 and len(entry.sha256) == 64
+        assert entry.size_bytes and entry.size_bytes > 0
 
 
 def test_datasets_root_prefers_the_environment_override(
@@ -248,7 +264,7 @@ def test_install_downloads_extracts_and_renames_atomically(
         return httpx.Response(200, content=payload)
 
     installer = DatasetInstaller(settings.downloads_dir, transport=httpx.MockTransport(serve))
-    entry = next(entry for entry in load_catalog() if entry.id == "gsm8k")
+    entry = gsm8k_entry_for(payload)
 
     installed = installer.install(entry, datasets_root / entry.relative_data_path)
 
@@ -312,7 +328,7 @@ def test_install_rejects_an_unsafe_archive_without_touching_the_target(
         settings.downloads_dir,
         transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=payload)),
     )
-    entry = next(entry for entry in load_catalog() if entry.id == "gsm8k")
+    entry = gsm8k_entry_for(payload)
 
     with pytest.raises(ValueError, match="unsafe archive member"):
         installer.install(entry, datasets_root / entry.relative_data_path)
@@ -328,8 +344,13 @@ async def test_install_returns_202_and_reports_progress_through_the_shared_row(
     api_app: FastAPI,
     client: httpx.AsyncClient,
     datasets_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     payload = build_zip({"gsm8k/test.jsonl": "{}"})
+    repinned = tuple(
+        gsm8k_entry_for(payload) if entry.id == "gsm8k" else entry for entry in load_catalog()
+    )
+    monkeypatch.setattr("aisbench_web.api.datasets.load_catalog", lambda: repinned)
     api_app.state.http_transport = httpx.MockTransport(
         lambda _request: httpx.Response(200, content=payload)
     )
