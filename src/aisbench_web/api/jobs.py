@@ -49,6 +49,8 @@ class JobCreate(BaseModel):
     model_endpoint_id: str
     dataset_id: str
     mode: Literal["accuracy", "performance"]
+    #: A specific AISBench config for this dataset; the first one for the mode when omitted.
+    config_name: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -61,6 +63,7 @@ class ModelDisplay(BaseModel):
 class DatasetDisplay(BaseModel):
     id: str
     name: str
+    config_name: str = ""
 
 
 class JobProgress(BaseModel):
@@ -127,7 +130,11 @@ def _to_response(job: Job, repository: JobRepository) -> JobResponse:
             model_name=model.get("model_name", ""),
             base_url=model.get("base_url", ""),
         ),
-        dataset=DatasetDisplay(id=dataset.get("id", ""), name=dataset.get("name", "")),
+        dataset=DatasetDisplay(
+            id=dataset.get("id", ""),
+            name=dataset.get("name", ""),
+            config_name=dataset.get("config_name", ""),
+        ),
         parameters=job.parameters,
         exit_code=job.exit_code,
         error_code=job.error_code,
@@ -178,11 +185,22 @@ def create_job(
         )
 
     entry = _catalog_entry(payload.dataset_id)
-    config_import = None if entry is None else entry.config_import_for(payload.mode)
-    if entry is None or config_import is None:
+    if entry is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dataset not found")
+    config = (
+        entry.config_named(payload.config_name)
+        if payload.config_name is not None
+        else entry.default_config(payload.mode)
+    )
+    if config is None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"this dataset has no {payload.mode} configuration in the installed AISBench",
+        )
+    if config.mode != payload.mode:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"configuration {config.name!r} is a {config.mode} configuration",
         )
 
     encrypted = endpoints.get_encrypted_api_key_for_owner(user.id, endpoint.id)
@@ -204,9 +222,10 @@ def create_job(
         dataset_snapshot={
             "id": dataset.id,
             "name": dataset.name,
-            "config_import": config_import,
-            "dataset_symbol": entry.dataset_symbol,
-            "relative_data_path": entry.relative_data_path,
+            "config_name": config.name,
+            "config_import": config.import_path,
+            "dataset_symbol": config.symbol,
+            "relative_data_path": entry.install_path,
         },
     )
     return _to_response(job, repository)

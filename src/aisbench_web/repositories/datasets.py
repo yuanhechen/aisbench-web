@@ -113,6 +113,17 @@ class DatasetRepository:
             updated_at=updated_at,
         )
 
+    def forget_datasets_other_than(self, known_ids: list[str]) -> None:
+        """Drop rows for datasets the installed AISBench no longer ships a config for."""
+        if not known_ids:
+            return
+        placeholders = ", ".join("?" for _ in known_ids)
+        with self.database.connect() as connection:
+            connection.execute(
+                f"DELETE FROM datasets WHERE id NOT IN ({placeholders})",
+                known_ids,
+            )
+
     def list_all(self) -> list[Dataset]:
         with self.database.connect() as connection:
             rows = connection.execute(

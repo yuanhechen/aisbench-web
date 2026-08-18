@@ -123,18 +123,19 @@ body {
 .workspace {
   background: var(--canvas);
   overflow-y: auto;
-  padding: 32px 40px;
+  padding: 20px 28px 40px;
 }
 
 .workspace-header {
   border-bottom: 1px solid var(--line);
-  margin-bottom: 24px;
-  padding-bottom: 16px;
+  margin-bottom: 16px;
+  padding-bottom: 10px;
 }
 
 .workspace-title {
-  font-size: 20px;
+  font-size: 15px;
   font-weight: 600;
+  letter-spacing: 0.01em;
   margin: 0;
 }
 
@@ -307,7 +308,7 @@ body {
   display: flex;
   gap: 16px;
   justify-content: space-between;
-  padding: 14px 0;
+  padding: 10px 0;
 }
 
 .resource-main {
@@ -367,15 +368,16 @@ body {
 
 .data-table th {
   border-bottom: 1px solid var(--line);
-  color: var(--text-secondary);
+  color: var(--text-tertiary);
+  font-size: 12px;
   font-weight: 400;
-  padding: 8px 12px 8px 0;
+  padding: 0 12px 6px 0;
   text-align: left;
 }
 
 .data-table td {
   border-bottom: 1px solid var(--line);
-  padding: 12px 12px 12px 0;
+  padding: 9px 12px 9px 0;
   vertical-align: top;
 }
 
@@ -428,7 +430,7 @@ body {
 
 .form-step {
   border-bottom: 1px solid var(--line);
-  padding: 18px 0;
+  padding: 14px 0;
 }
 
 .form-step:last-of-type {
@@ -436,10 +438,10 @@ body {
 }
 
 .form-step-title {
-  color: var(--text-secondary);
-  font-size: 13px;
-  font-weight: 500;
-  margin: 0 0 10px;
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-weight: 400;
+  margin: 0 0 8px;
 }
 
 .field-grid {
@@ -531,7 +533,7 @@ select.input {
 
 .task-block {
   border-bottom: 1px solid var(--line);
-  padding: 18px 0;
+  padding: 14px 0;
 }
 
 .config-row {

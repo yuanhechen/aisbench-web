@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import type { FormEvent } from "react";
 
 import { api } from "../api/client";
-import type { Dataset, Job, ModelEndpoint } from "../api/types";
+import type { Dataset, DatasetConfig, Job, ModelEndpoint } from "../api/types";
 import { useApiQuery } from "../api/use-query";
 import { useAuth } from "../auth/auth-context";
 import { useI18n } from "../i18n/i18n-context";
@@ -13,6 +13,7 @@ type Mode = "accuracy" | "performance";
 interface FormState {
   modelEndpointId: string;
   datasetId: string;
+  configName: string;
   mode: Mode;
   numPrompts: string;
   maxNumWorkers: string;
@@ -26,6 +27,7 @@ interface FormState {
 const INITIAL: FormState = {
   modelEndpointId: "",
   datasetId: "",
+  configName: "",
   mode: "accuracy",
   numPrompts: "8",
   maxNumWorkers: "1",
@@ -59,17 +61,27 @@ export function NewJobPage() {
   const selectedDataset = installed.find((dataset) => dataset.id === form.datasetId) ?? null;
   const activeModels = (models.data ?? []).filter((model) => model.is_active);
 
-  const modeUnsupported =
-    selectedDataset !== null &&
-    (form.mode === "accuracy"
-      ? selectedDataset.accuracy_config === null
-      : selectedDataset.performance_config === null);
+  // The variants AISBench actually ships for this dataset and mode.
+  const availableConfigs = useMemo(
+    () => (selectedDataset?.configs ?? []).filter((config) => config.mode === form.mode),
+    [selectedDataset, form.mode],
+  );
+  const modeUnsupported = selectedDataset !== null && availableConfigs.length === 0;
+  const selectedConfig =
+    availableConfigs.find((config) => config.name === form.configName) ?? availableConfigs[0];
 
   const ready =
     form.modelEndpointId !== "" && selectedDataset !== null && !modeUnsupported && !submitting;
 
   function update<K extends keyof FormState>(field: K, value: FormState[K]) {
-    setForm((current) => ({ ...current, [field]: value }));
+    setForm((current) => {
+      const next = { ...current, [field]: value };
+      // A variant belongs to one dataset and one mode; changing either invalidates the choice.
+      if (field === "datasetId" || field === "mode") {
+        next.configName = "";
+      }
+      return next;
+    });
     setQueued(null);
   }
 
@@ -101,6 +113,7 @@ export function NewJobPage() {
           model_endpoint_id: form.modelEndpointId,
           dataset_id: form.datasetId,
           mode: form.mode,
+          config_name: selectedConfig?.name ?? null,
           parameters: parameters(),
         }),
       );
@@ -114,7 +127,7 @@ export function NewJobPage() {
 
   return (
     <form onSubmit={handleSubmit}>
-      <PageHeader title={t("nav.newJob")} subtitle={t("newJob.subtitle")} />
+      <PageHeader title={t("nav.newJob")} />
 
       <section className="form-step">
         <h2 className="form-step-title">{t("newJob.stepModel")}</h2>
@@ -177,6 +190,27 @@ export function NewJobPage() {
               ? t("newJob.noPerformanceConfig")
               : t("newJob.noAccuracyConfig")}
           </p>
+        )}
+
+        {availableConfigs.length > 0 && (
+          <>
+            <label className="field" htmlFor="job-config">
+              {t("newJob.config")}
+            </label>
+            <select
+              id="job-config"
+              className="input"
+              value={selectedConfig?.name ?? ""}
+              onChange={(event) => update("configName", event.target.value)}
+            >
+              {availableConfigs.map((config) => (
+                <option key={config.name} value={config.name}>
+                  {describeConfig(config)}
+                </option>
+              ))}
+            </select>
+            <p className="field-hint">{selectedConfig?.name}</p>
+          </>
         )}
       </section>
 
@@ -266,6 +300,17 @@ export function NewJobPage() {
       </section>
     </form>
   );
+}
+
+/** Read a config file name back as the options it encodes. */
+function describeConfig(config: DatasetConfig): string {
+  const parts: string[] = [];
+  if (config.shots !== null) {
+    parts.push(`${config.shots}-shot`);
+  }
+  parts.push(config.chain_of_thought ? "CoT" : "non-CoT");
+  parts.push(config.chat_prompt ? "chat" : "completion");
+  return parts.join(" · ");
 }
 
 function NumberField({

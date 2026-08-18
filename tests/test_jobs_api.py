@@ -28,10 +28,14 @@ ACCURACY_JOB = {
 
 
 @pytest.fixture
-def datasets_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    root = tmp_path / "ais_bench" / "datasets"
+def datasets_root(
+    aisbench_configs: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    root = tmp_path / "installed-datasets"
     (root / "gsm8k").mkdir(parents=True)
-    # Installed, but the installed AISBench ships no mmlu *_perf config.
+    # Installed, but the stand-in AISBench ships no mmlu *_perf config.
     (root / "mmlu").mkdir()
     monkeypatch.setenv("AISBENCH_DATASETS_DIR", str(root))
     return root
@@ -105,7 +109,7 @@ async def test_created_job_keeps_display_snapshots_when_the_endpoint_changes(own
 
     detail = (await owner.client.get(f"/api/jobs/{job_id}")).json()
     assert detail["model"]["model_name"] == "Qwen3-32B"
-    assert detail["dataset"]["name"] == "GSM8K"
+    assert detail["dataset"]["name"] == "gsm8k"
 
 
 @pytest.mark.asyncio
@@ -169,7 +173,7 @@ async def test_a_dataset_without_a_config_for_the_mode_is_refused(owner) -> None
 
 @pytest.mark.asyncio
 async def test_an_uninstalled_dataset_is_refused(owner) -> None:
-    response = await submit(owner, dataset_id="ceval")
+    response = await submit(owner, dataset_id="synthetic")
 
     assert response.status_code == 409
     assert "install" in response.json()["detail"]

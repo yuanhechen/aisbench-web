@@ -1,0 +1,99 @@
+{
+  "downloads": {
+    "ARC": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/ARC.zip",
+      "sha256": "63017b8c181ad04043b638651e2b6254c23a0bb2daa2be1954f75f134475ae47",
+      "size_bytes": 454249
+    },
+    "BBH": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/BBH.zip",
+      "sha256": "0879e95ed40bacc019ef5c74969ce3f1a689f61d2eca9d5fcb4a4cfea5b2a5e0",
+      "size_bytes": 330778
+    },
+    "SuperGLUE": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/SuperGLUE.zip",
+      "sha256": "5e5bc5b7ffd2c3777a3c505a1d9d4daaff291ae75de719d02b7e35ec3a69a15a",
+      "size_bytes": 11994164
+    },
+    "ceval": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/ceval.zip",
+      "sha256": "cbf7c26ed3c475361aac0957e1f3d07a4ac0cac18dd193ae22851c16c83cc2f4",
+      "size_bytes": 1556970
+    },
+    "cmmlu": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/cmmlu.zip",
+      "sha256": "c239332d666aa7d45656f70a3772996d565e19b4930ad9012cb16bd11a1d2e26",
+      "size_bytes": 1080124
+    },
+    "drop_simple_eval": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/drop_simple_eval.zip",
+      "sha256": "71e47c1b02e5fdbac3386590b6200ca46923b4af9eeffd95602444ab5569ccf7",
+      "size_bytes": 3654210
+    },
+    "gpqa": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/gpqa.zip",
+      "sha256": "3ea7acd5c550280b428524b33ffe8f5998c9fcfda2250e0b97a12e9c9e78b40f",
+      "size_bytes": 2347494
+    },
+    "gsm8k": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/gsm8k.zip",
+      "sha256": "5e90449bd5ed9c728dd32fc0c36a21c2cb02fd1fe38cb00fcf5672fcf3dc9378",
+      "size_bytes": 3409276
+    },
+    "hellaswag": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/hellaswag.zip",
+      "sha256": "4de795603e40dd664c9174e6f18bb480ecb98eccc43748defa16ebf1bd15c7ec",
+      "size_bytes": 2835732
+    },
+    "humaneval": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/humaneval.zip",
+      "sha256": "52aeadaa439873c48c11df44cd035d261f95cb83a035b8e06f4da6b82a2a6b88",
+      "size_bytes": 45653
+    },
+    "ifeval": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/ifeval.zip",
+      "sha256": "1b12ed002bfe95dbd2699d34ed961f665d8f870828045b211de4c604cff4fcc8",
+      "size_bytes": 46609
+    },
+    "lambada": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/lambada.zip",
+      "sha256": "20d7c53972715ed8377331af896858312a0faa4264fe1def0c7e7d0f3ba079c8",
+      "size_bytes": 716840
+    },
+    "math": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/math.zip",
+      "sha256": "cf44a0c065f23dbb96e3239115758f7442b725776f3dedfa4473821a1c98fe03",
+      "size_bytes": 4361072
+    },
+    "mbpp": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/mbpp.zip",
+      "sha256": "d753de7da78cc92b7c3dc07f2a1ae3a7ef6933024c86560e3d6326651650a744",
+      "size_bytes": 187872
+    },
+    "mmlu": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/mmlu.zip",
+      "sha256": "91d1fe0e3a0dde2e8d8af25f537ee0ec6c6378a499845c80f78f67cbe2d38e9e",
+      "size_bytes": 2471795
+    },
+    "mmlu_pro": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/mmlu_pro.zip",
+      "sha256": "e2e22e38e1c001788502878632ae1443f2af25878d2322512815ea0857c61788",
+      "size_bytes": 3632918
+    },
+    "race": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/race.zip",
+      "sha256": "2eed8b480c2baa325319c424e6709034e1e121599ad5a667e70b796abd8baecf",
+      "size_bytes": 2704830
+    },
+    "triviaqa": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/triviaqa.zip",
+      "sha256": "676e9ef3470f9b74501b1b97e345876f0b377952f49e3616a9c6d8780f3ab58a",
+      "size_bytes": 6133219
+    },
+    "winogrande": {
+      "url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/winogrande.zip",
+      "sha256": "8daac853834da19bb49e82193ddba9969a2d33a9d72cbc168b1cefa995830276",
+      "size_bytes": 3412394
+    }
+  }
+}

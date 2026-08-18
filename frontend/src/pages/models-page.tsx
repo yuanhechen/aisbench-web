@@ -21,6 +21,7 @@ export function ModelsPage() {
   const { reportFailure } = useAuth();
   const endpoints = useApiQuery<ModelEndpoint[]>("/api/models", { onFailure: reportFailure });
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<ModelEndpoint | null>(null);
   const [probes, setProbes] = useState<Record<string, ProbeResult>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -55,7 +56,7 @@ export function ModelsPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.models")} subtitle={t("models.subtitle")}>
+      <PageHeader title={t("nav.models")}>
         <button type="button" className="button-primary" onClick={() => setCreating(true)}>
           {t("models.create")}
         </button>
@@ -103,6 +104,13 @@ export function ModelsPage() {
               <button
                 type="button"
                 className="button-secondary"
+                onClick={() => setEditing(endpoint)}
+              >
+                {t("models.edit")}
+              </button>
+              <button
+                type="button"
+                className="button-secondary"
                 disabled={busy === endpoint.id}
                 onClick={() => void runProbe(endpoint)}
               >
@@ -122,10 +130,21 @@ export function ModelsPage() {
       </div>
 
       {creating && (
-        <CreateEndpointDialog
+        <EndpointDialog
           onClose={() => setCreating(false)}
-          onCreated={() => {
+          onSaved={() => {
             setCreating(false);
+            endpoints.reload();
+          }}
+        />
+      )}
+
+      {editing !== null && (
+        <EndpointDialog
+          endpoint={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
             endpoints.reload();
           }}
         />
@@ -134,15 +153,22 @@ export function ModelsPage() {
   );
 }
 
-function CreateEndpointDialog({
+function EndpointDialog({
+  endpoint,
   onClose,
-  onCreated,
+  onSaved,
 }: {
+  endpoint?: ModelEndpoint;
   onClose: () => void;
-  onCreated: () => void;
+  onSaved: () => void;
 }) {
   const { t } = useI18n();
-  const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const editing = endpoint !== undefined;
+  const [draft, setDraft] = useState<Draft>(
+    endpoint === undefined
+      ? EMPTY_DRAFT
+      : { base_url: endpoint.base_url, api_key: "", name: endpoint.name },
+  );
   const [probe, setProbe] = useState<ProbeResult | null>(null);
   const [probing, setProbing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -178,13 +204,22 @@ function CreateEndpointDialog({
     setError(null);
     setSaving(true);
     try {
-      await api.post("/api/models", {
-        name: draft.name,
-        base_url: draft.base_url,
-        // An empty box means "no key", not an empty key.
-        api_key: draft.api_key === "" ? null : draft.api_key,
-      });
-      onCreated();
+      if (editing) {
+        await api.patch(`/api/models/${endpoint.id}`, {
+          name: draft.name,
+          base_url: draft.base_url,
+          // Left blank when editing, the stored key is kept rather than cleared.
+          ...(draft.api_key === "" ? {} : { api_key: draft.api_key }),
+        });
+      } else {
+        await api.post("/api/models", {
+          name: draft.name,
+          base_url: draft.base_url,
+          // An empty box means "no key", not an empty key.
+          api_key: draft.api_key === "" ? null : draft.api_key,
+        });
+      }
+      onSaved();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : String(failure));
     } finally {
@@ -194,8 +229,13 @@ function CreateEndpointDialog({
 
   return (
     <div className="modal-backdrop">
-      <form className="modal" role="dialog" aria-label={t("models.create")} onSubmit={handleSubmit}>
-        <h2 className="modal-title">{t("models.create")}</h2>
+      <form
+        className="modal"
+        role="dialog"
+        aria-label={editing ? t("models.edit") : t("models.create")}
+        onSubmit={handleSubmit}
+      >
+        <h2 className="modal-title">{editing ? t("models.edit") : t("models.create")}</h2>
         <div>
           <label className="field" htmlFor="model-base_url">
             {t("models.baseUrl")}
@@ -217,6 +257,9 @@ function CreateEndpointDialog({
             id="model-api_key"
             className="input"
             type="password"
+            placeholder={
+              editing && endpoint.has_api_key ? t("models.keyUnchanged") : undefined
+            }
             value={draft.api_key}
             onChange={(event) => update("api_key", event.target.value)}
           />

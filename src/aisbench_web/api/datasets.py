@@ -18,13 +18,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/datasets")
 
 
+class DatasetConfigResponse(BaseModel):
+    """One AISBench config file: a specific way of running this dataset."""
+
+    name: str
+    mode: str
+    shots: int | None
+    chain_of_thought: bool
+    chat_prompt: bool
+
+
 class DatasetResponse(BaseModel):
     id: str
     name: str
     description: str
     config_name: str
-    accuracy_config: str | None
-    performance_config: str | None
+    configs: list[DatasetConfigResponse]
     status: str
     local_path: str | None
     size_bytes: int | None
@@ -38,8 +47,16 @@ class DatasetResponse(BaseModel):
             name=dataset.name,
             description=dataset.description,
             config_name=dataset.config_name,
-            accuracy_config=None if entry is None else entry.accuracy_config,
-            performance_config=None if entry is None else entry.performance_config,
+            configs=[
+                DatasetConfigResponse(
+                    name=config.name,
+                    mode=config.mode,
+                    shots=config.shots,
+                    chain_of_thought=config.chain_of_thought,
+                    chat_prompt=config.chat_prompt,
+                )
+                for config in (() if entry is None else entry.configs)
+            ],
             status=dataset.status,
             local_path=dataset.local_path,
             size_bytes=dataset.size_bytes,
@@ -75,13 +92,14 @@ def run_install(
                 "Could not locate the AISBench dataset directory; set AISBENCH_DATASETS_DIR"
             )
         installer = DatasetInstaller(settings.downloads_dir, transport=transport)
-        target = installer.install(entry, root / entry.relative_data_path)
+        target = installer.install(entry, root / entry.install_path)
     except Exception as exc:
         # Any failure is reported through the dataset row, never by crashing the worker thread.
         logger.warning("Installing dataset %s failed", entry.id, exc_info=exc)
         repository.mark_failed(entry.id, str(exc) or exc.__class__.__name__)
         return
-    repository.mark_available(entry.id, local_path=str(target), size_bytes=entry.size_bytes)
+    size = None if entry.download is None else entry.download.size_bytes
+    repository.mark_available(entry.id, local_path=str(target), size_bytes=size)
 
 
 @router.get("", response_model=list[DatasetResponse])

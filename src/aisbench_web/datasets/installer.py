@@ -77,8 +77,8 @@ class DatasetInstaller:
         self._timeout = timeout
 
     def install(self, entry: "CatalogEntry", target: Path) -> Path:
-        if entry.download_url is None:
-            raise ValueError(f"Dataset {entry.id!r} has no download URL")
+        if entry.download is None:
+            raise ValueError(f"Dataset {entry.id!r} has no verified download source")
         if target.is_dir():
             return target
 
@@ -105,9 +105,9 @@ class DatasetInstaller:
         return target
 
     def _require_disk_space(self, entry: "CatalogEntry") -> None:
-        if entry.size_bytes is None:
+        if entry.download is None or entry.download.size_bytes is None:
             return
-        required = entry.size_bytes * DISK_HEADROOM_FACTOR
+        required = entry.download.size_bytes * DISK_HEADROOM_FACTOR
         free = shutil.disk_usage(self.downloads_dir).free
         if free < required:
             raise ValueError(
@@ -116,6 +116,8 @@ class DatasetInstaller:
             )
 
     def _download(self, entry: "CatalogEntry", part: Path) -> None:
+        if entry.download is None:
+            raise ValueError(f"Dataset {entry.id!r} has no verified download source")
         digest = hashlib.sha256()
         with (
             httpx.Client(
@@ -123,7 +125,7 @@ class DatasetInstaller:
                 timeout=self._timeout,
                 follow_redirects=True,
             ) as client,
-            client.stream("GET", entry.download_url) as response,
+            client.stream("GET", entry.download.url) as response,
             part.open("wb") as output,
         ):
             response.raise_for_status()
@@ -131,10 +133,10 @@ class DatasetInstaller:
                 digest.update(chunk)
                 output.write(chunk)
 
-        if entry.sha256 is not None and digest.hexdigest() != entry.sha256:
+        if entry.download is not None and digest.hexdigest() != entry.download.sha256:
             raise ValueError(
                 f"Dataset {entry.id!r} failed its checksum: "
-                f"expected {entry.sha256}, downloaded {digest.hexdigest()}"
+                f"expected {entry.download.sha256}, downloaded {digest.hexdigest()}"
             )
 
     @staticmethod

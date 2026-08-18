@@ -3,105 +3,124 @@ import json
 import logging
 import os
 import time
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 
+from aisbench_web.datasets.scan import DatasetConfig, ScannedDataset, scan_dataset_configs
 from aisbench_web.db import Database
 from aisbench_web.repositories.datasets import DatasetRepository, DatasetStatus
 from aisbench_web.settings import Settings
 
 logger = logging.getLogger(__name__)
 
-CATALOG_RESOURCE = "catalog.json"
+DOWNLOADS_RESOURCE = "downloads.json"
 STALE_PART_AGE_SECONDS = 24 * 60 * 60
 
 
-DATASET_CONFIG_ROOT = "ais_bench.benchmark.configs.datasets"
+@dataclass(frozen=True)
+class DownloadSource:
+    url: str
+    sha256: str
+    size_bytes: int
 
 
 @dataclass(frozen=True)
 class CatalogEntry:
+    """A dataset the installed AISBench supports, plus how to obtain it."""
+
     id: str
-    name: str
-    description: str
-    config_package: str
-    dataset_symbol: str
-    accuracy_config: str
-    performance_config: str | None
-    relative_data_path: str
-    download_url: str | None
-    sha256: str | None
-    size_bytes: int | None
+    install_path: str | None
+    required_path: str | None
+    configs: tuple[DatasetConfig, ...]
+    download: DownloadSource | None
 
     @property
     def can_install(self) -> bool:
-        return self.download_url is not None
+        return self.download is not None
 
-    def config_for(self, mode: str) -> str | None:
-        return self.accuracy_config if mode == "accuracy" else self.performance_config
+    def configs_for(self, mode: str) -> tuple[DatasetConfig, ...]:
+        return tuple(config for config in self.configs if config.mode == mode)
 
-    def config_import_for(self, mode: str) -> str | None:
-        """Build the dotted import the generator may interpolate, or None for an unsupported mode."""
-        config = self.config_for(mode)
-        if config is None:
-            return None
-        return f"{DATASET_CONFIG_ROOT}.{self.config_package}.{config}"
+    def default_config(self, mode: str) -> DatasetConfig | None:
+        candidates = self.configs_for(mode)
+        return candidates[0] if candidates else None
 
-    def replace(self, **changes: object) -> "CatalogEntry":
-        return replace(self, **changes)
-
-
-def _validated_entry(raw: dict) -> CatalogEntry:
-    relative = Path(raw["relative_data_path"])
-    if relative.is_absolute() or ".." in relative.parts:
-        raise ValueError(f"catalog entry {raw['id']!r} has an unsafe relative_data_path")
-    return CatalogEntry(
-        id=raw["id"],
-        name=raw["name"],
-        description=raw["description"],
-        config_package=raw["config_package"],
-        dataset_symbol=raw["dataset_symbol"],
-        accuracy_config=raw["accuracy_config"],
-        performance_config=raw.get("performance_config"),
-        relative_data_path=raw["relative_data_path"],
-        download_url=raw.get("download_url"),
-        sha256=raw.get("sha256"),
-        size_bytes=raw.get("size_bytes"),
-    )
+    def config_named(self, name: str) -> DatasetConfig | None:
+        return next((config for config in self.configs if config.name == name), None)
 
 
 @lru_cache(maxsize=1)
-def load_catalog() -> tuple[CatalogEntry, ...]:
-    """Load the packaged, trusted dataset manifest."""
-    package = resources.files("aisbench_web.datasets")
-    raw = json.loads(package.joinpath(CATALOG_RESOURCE).read_text(encoding="utf-8"))
-    return tuple(_validated_entry(entry) for entry in raw["datasets"])
+def load_download_sources() -> dict[str, DownloadSource]:
+    """Verified archives, keyed by the directory they unpack into.
 
-
-def resolve_datasets_root() -> Path | None:
-    """Locate AISBench's dataset directory, or None when AISBench is not importable.
-
-    AISBench dataset configs declare ``path='ais_bench/datasets/<name>'`` relative to the source
-    root, so the directory to populate is ``<ais_bench package>/datasets``.
+    Each entry was downloaded and checked against the path the installed configs expect;
+    an archive that unpacks somewhere else is not listed, because installing it would put
+    the data where nothing looks for it.
     """
-    override = os.environ.get("AISBENCH_DATASETS_DIR")
-    if override:
-        return Path(override).expanduser().resolve()
+    package = resources.files("aisbench_web.datasets")
+    raw = json.loads(package.joinpath(DOWNLOADS_RESOURCE).read_text(encoding="utf-8"))
+    return {
+        directory: DownloadSource(
+            url=source["url"], sha256=source["sha256"], size_bytes=source["size_bytes"]
+        )
+        for directory, source in raw["downloads"].items()
+    }
 
+
+def resolve_ais_bench_package() -> Path | None:
+    """Locate the installed ais_bench package, or None when it is not importable."""
     try:
         spec = importlib.util.find_spec("ais_bench")
     except (ImportError, ValueError):
         return None
     if spec is None or not spec.submodule_search_locations:
         return None
-    return Path(next(iter(spec.submodule_search_locations))).resolve() / "datasets"
+    return Path(next(iter(spec.submodule_search_locations))).resolve()
+
+
+def resolve_datasets_root() -> Path | None:
+    """Locate AISBench's dataset directory.
+
+    AISBench dataset configs declare ``path='ais_bench/datasets/<name>'`` relative to the
+    source root, so the directory to populate is ``<ais_bench package>/datasets``.
+    """
+    override = os.environ.get("AISBENCH_DATASETS_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+    package = resolve_ais_bench_package()
+    return None if package is None else package / "datasets"
+
+
+def load_catalog() -> tuple[CatalogEntry, ...]:
+    """Read the catalog from the installed AISBench, pairing it with verified download sources."""
+    package = resolve_ais_bench_package()
+    override = os.environ.get("AISBENCH_CONFIGS_PACKAGE")
+    if override:
+        package = Path(override).expanduser().resolve()
+    if package is None:
+        return ()
+    return _entries_for(scan_dataset_configs(package))
+
+
+def _entries_for(scanned: tuple[ScannedDataset, ...]) -> tuple[CatalogEntry, ...]:
+    sources = load_download_sources()
+    return tuple(
+        CatalogEntry(
+            id=dataset.id,
+            install_path=dataset.install_path,
+            required_path=dataset.required_path,
+            configs=dataset.configs,
+            download=sources.get(dataset.install_path or ""),
+        )
+        for dataset in scanned
+    )
 
 
 class CatalogService:
-    """Reconcile the packaged manifest and the on-disk layout with the shared dataset rows."""
+    """Reconcile what AISBench supports and what is on disk with the shared dataset rows."""
 
     def __init__(self, database: Database, settings: Settings) -> None:
         self.repository = DatasetRepository(database)
@@ -109,60 +128,48 @@ class CatalogService:
 
     def sync(self) -> None:
         root = resolve_datasets_root()
-        if root is None:
+        entries = load_catalog()
+        if not entries:
             logger.warning(
-                "Could not locate the AISBench dataset directory; "
-                "set AISBENCH_DATASETS_DIR to enable dataset installation"
+                "Could not read dataset configs from AISBench; "
+                "the shared dataset catalog will be empty"
             )
 
-        # A row left in `installing` belongs to a process that is no longer running, so its lock
-        # must be released before anyone can retry.
+        # A row left in `installing` belongs to a process that is no longer running.
         self.repository.release_stale_install_locks()
         self._remove_stale_part_files()
 
         timestamp = datetime.now(timezone.utc).isoformat()
-        catalog_paths: set[Path] = set()
-        for entry in load_catalog():
-            local_path = None if root is None else root / entry.relative_data_path
-            if local_path is not None:
-                catalog_paths.add(local_path)
-            installed = local_path is not None and local_path.is_dir()
+        for entry in entries:
+            installed = self._installed_path(root, entry)
             self.repository.upsert_catalog_entry(
                 entry_id=entry.id,
-                config_name=entry.accuracy_config,
-                name=entry.name,
-                description=entry.description,
-                download_url=entry.download_url,
-                sha256=entry.sha256,
-                size_bytes=entry.size_bytes,
-                local_path=str(local_path) if installed else None,
+                config_name=self._display_config(entry),
+                name=entry.id,
+                description="",
+                download_url=None if entry.download is None else entry.download.url,
+                sha256=None if entry.download is None else entry.download.sha256,
+                size_bytes=None if entry.download is None else entry.download.size_bytes,
+                local_path=None if installed is None else str(installed),
                 status=DatasetStatus.AVAILABLE if installed else DatasetStatus.NOT_INSTALLED,
                 updated_at=timestamp,
             )
+        self.repository.forget_datasets_other_than([entry.id for entry in entries])
 
-        if root is not None:
-            self._record_detected_directories(root, catalog_paths, timestamp)
+    @staticmethod
+    def _installed_path(root: Path | None, entry: CatalogEntry) -> Path | None:
+        """A dataset counts as installed only when the path its configs read actually exists."""
+        if root is None or entry.required_path is None:
+            return None
+        required = root / entry.required_path
+        if not required.exists():
+            return None
+        return root / (entry.install_path or entry.required_path)
 
-    def _record_detected_directories(
-        self,
-        root: Path,
-        catalog_paths: set[Path],
-        timestamp: str,
-    ) -> None:
-        """Surface datasets already present in AISBench that the manifest does not cover."""
-        if not root.is_dir():
-            return
-        for candidate in sorted(root.iterdir()):
-            if candidate in catalog_paths or candidate.name.startswith("."):
-                continue
-            if not candidate.is_dir():
-                continue
-            self.repository.upsert_detected_directory(
-                entry_id=candidate.name,
-                name=candidate.name,
-                local_path=str(candidate),
-                updated_at=timestamp,
-            )
+    @staticmethod
+    def _display_config(entry: CatalogEntry) -> str:
+        default = entry.default_config("accuracy") or entry.default_config("performance")
+        return entry.id if default is None else default.name
 
     def _remove_stale_part_files(self) -> None:
         downloads = self.settings.downloads_dir

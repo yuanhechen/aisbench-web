@@ -7,13 +7,20 @@ export interface ModelEndpoint {
   is_active: boolean;
 }
 
+export interface DatasetConfig {
+  name: string;
+  mode: "accuracy" | "performance";
+  shots: number | null;
+  chain_of_thought: boolean;
+  chat_prompt: boolean;
+}
+
 export interface Dataset {
   id: string;
   name: string;
   description: string;
   config_name: string;
-  accuracy_config: string | null;
-  performance_config: string | null;
+  configs: DatasetConfig[];
   status: "not_installed" | "installing" | "available" | "failed" | "detected";
   local_path: string | null;
   size_bytes: number | null;

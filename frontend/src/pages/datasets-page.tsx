@@ -18,12 +18,30 @@ const STATUS_LABELS: Record<Dataset["status"], MessageKey> = {
   detected: "datasets.detected",
 };
 
+/** Summarise the variants AISBench ships, in the reader's language. */
+function useConfigSummary() {
+  const { t } = useI18n();
+  return (dataset: Dataset): string => {
+    const accuracy = dataset.configs.filter((c) => c.mode === "accuracy").length;
+    const performance = dataset.configs.filter((c) => c.mode === "performance").length;
+    const parts: string[] = [];
+    if (accuracy > 0) {
+      parts.push(`${accuracy} ${t("datasets.accuracyConfigs")}`);
+    }
+    if (performance > 0) {
+      parts.push(`${performance} ${t("datasets.performanceConfigs")}`);
+    }
+    return parts.join(" · ");
+  };
+}
+
 export function DatasetsPage() {
   const { t } = useI18n();
   const { reportFailure } = useAuth();
   const [installing, setInstalling] = useState<Record<string, boolean>>({});
   const [error, setError] = useState<string | null>(null);
   const [watching, setWatching] = useState(false);
+  const describeConfigs = useConfigSummary();
   // Installs run in the background on the server, so the shared rows are polled -- but only
   // while one is actually running. A settled catalog does not change on its own.
   const datasets = useApiQuery<Dataset[]>("/api/datasets", {
@@ -62,7 +80,7 @@ export function DatasetsPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.datasets")} subtitle={t("datasets.subtitle")} />
+      <PageHeader title={t("nav.datasets")} />
       {error !== null && (
         <p className="form-error" role="alert">
           {error}
@@ -84,7 +102,7 @@ export function DatasetsPage() {
               <tr key={dataset.id}>
                 <td>
                   <div className="resource-title">{dataset.name}</div>
-                  <div className="resource-meta">{dataset.description}</div>
+                  <div className="resource-meta">{describeConfigs(dataset)}</div>
                   {dataset.error_message !== null && (
                     <div className="probe-failed">{dataset.error_message}</div>
                   )}

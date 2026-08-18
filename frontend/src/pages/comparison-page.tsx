@@ -77,7 +77,7 @@ export function ComparisonPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.comparison")} subtitle={t("comparison.subtitle")} />
+      <PageHeader title={t("nav.comparison")} />
 
       {jobs.data !== null && comparable.length === 0 && (
         <EmptyState message={t("comparison.empty")} />

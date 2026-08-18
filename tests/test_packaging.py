@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI
 
 from aisbench_web.app import PACKAGED_STATIC_DIR, create_app
+from aisbench_web.datasets.catalog import DOWNLOADS_RESOURCE
 
 REPOSITORY_ROOT = Path(__file__).resolve().parent.parent
 INDEX_MARKER = '<div id="root"></div>'
@@ -136,7 +137,9 @@ def test_the_wheel_carries_the_interface_and_the_catalog(tmp_path: Path) -> None
         names = set(archive.namelist())
 
     assert "aisbench_web/static/index.html" in names
-    assert "aisbench_web/datasets/catalog.json" in names
+    # Named from the constant the loader uses, so renaming the resource without
+    # repackaging it fails here rather than at startup on a user's machine.
+    assert f"aisbench_web/datasets/{DOWNLOADS_RESOURCE}" in names
     assert any(name.startswith("aisbench_web/static/assets/") for name in names)
     # The target machine must not need Node; the wheel carries the built output only.
     assert not any("node_modules" in name for name in names)

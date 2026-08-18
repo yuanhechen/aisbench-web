@@ -17,6 +17,50 @@ TEST_PASSWORD = "correct horse battery staple"
 ClientFactory = Callable[[str], Awaitable[httpx.AsyncClient]]
 
 
+DATASET_CONFIG = """\
+from ais_bench.benchmark.openicl.icl_inferencer import GenInferencer
+
+{symbol} = [
+    dict(
+        abbr='{dataset}',
+        path='ais_bench/datasets/{data_path}',
+        reader_cfg=dict(input_columns=['question'], output_column='answer'),
+    )
+]
+"""
+
+# A stand-in for the AISBench config tree the catalog reads. gsm8k and mmlu appear in the
+# packaged download manifest; synthetic deliberately does not.
+FAKE_DATASET_CONFIGS = {
+    "gsm8k": ("gsm8k", [
+        "gsm8k_gen_4_shot_cot_chat_prompt",
+        "gsm8k_gen_0_shot_cot_str",
+        "gsm8k_gen_0_shot_cot_str_perf",
+    ]),
+    "mmlu": ("mmlu", ["mmlu_gen_5_shot_chat_prompt"]),
+    "synthetic": ("synthetic", ["synthetic_gen_string", "synthetic_gen_string_perf"]),
+}
+
+
+@pytest.fixture
+def aisbench_configs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Write a small AISBench config tree and point the catalog at it."""
+    package = tmp_path / "ais_bench"
+    root = package / "benchmark" / "configs" / "datasets"
+    for dataset, (data_path, configs) in FAKE_DATASET_CONFIGS.items():
+        directory = root / dataset
+        directory.mkdir(parents=True)
+        for config in configs:
+            (directory / f"{config}.py").write_text(
+                DATASET_CONFIG.format(
+                    symbol=f"{dataset}_datasets", dataset=dataset, data_path=data_path
+                ),
+                encoding="utf-8",
+            )
+    monkeypatch.setenv("AISBENCH_CONFIGS_PACKAGE", str(package))
+    return package
+
+
 @pytest.fixture
 def settings(tmp_path: Path) -> Settings:
     created = Settings.create(tmp_path, tmp_path / "ais_bench", 1)
@@ -25,7 +69,7 @@ def settings(tmp_path: Path) -> Settings:
 
 
 @pytest.fixture
-def api_app(settings: Settings) -> FastAPI:
+def api_app(settings: Settings, aisbench_configs: Path) -> FastAPI:
     return create_app(settings=settings, start_worker=False)
 
 

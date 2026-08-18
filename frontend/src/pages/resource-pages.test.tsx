@@ -15,13 +15,35 @@ const MODEL = {
   has_api_key: true,
   is_active: true,
 };
+const GSM8K_CONFIGS = [
+  {
+    name: "gsm8k_gen_4_shot_cot_chat_prompt",
+    mode: "accuracy",
+    shots: 4,
+    chain_of_thought: true,
+    chat_prompt: true,
+  },
+  {
+    name: "gsm8k_gen_0_shot_cot_str",
+    mode: "accuracy",
+    shots: 0,
+    chain_of_thought: true,
+    chat_prompt: false,
+  },
+  {
+    name: "gsm8k_gen_0_shot_cot_str_perf",
+    mode: "performance",
+    shots: 0,
+    chain_of_thought: true,
+    chat_prompt: false,
+  },
+];
 const GSM8K = {
   id: "gsm8k",
-  name: "GSM8K",
-  description: "math",
-  config_name: "gsm8k_gen",
-  accuracy_config: "gsm8k_accuracy",
-  performance_config: "gsm8k_perf",
+  name: "gsm8k",
+  description: "",
+  config_name: "gsm8k_gen_4_shot_cot_chat_prompt",
+  configs: GSM8K_CONFIGS,
   status: "available",
   local_path: "/data/gsm8k",
   size_bytes: null,
@@ -31,9 +53,18 @@ const GSM8K = {
 const MMLU = {
   ...GSM8K,
   id: "mmlu",
-  name: "MMLU",
-  accuracy_config: "mmlu_accuracy",
-  performance_config: null,
+  name: "mmlu",
+  config_name: "mmlu_gen_5_shot_chat_prompt",
+  // AISBench ships no performance config for this dataset.
+  configs: [
+    {
+      name: "mmlu_gen_5_shot_chat_prompt",
+      mode: "accuracy",
+      shots: 5,
+      chain_of_thought: false,
+      chat_prompt: true,
+    },
+  ],
 };
 
 function renderAt(path: string) {
@@ -72,6 +103,7 @@ describe("new evaluation", () => {
       model_endpoint_id: "model-1",
       dataset_id: "gsm8k",
       mode: "performance",
+      config_name: "gsm8k_gen_0_shot_cot_str_perf",
       parameters: { num_prompts: 32 },
     });
   });
@@ -97,6 +129,46 @@ describe("new evaluation", () => {
     expect(submitted.mode).toBe("accuracy");
     expect(submitted.parameters).toMatchObject({ max_num_workers: 4 });
     expect(screen.getByText(/队列位置/)).toHaveTextContent("3");
+  });
+
+  it("offers the config variants AISBench ships for the chosen dataset and mode", async () => {
+    const user = userEvent.setup();
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+
+    const configs = screen.getByLabelText("评测配置");
+    // Named for what the config actually does, with the file name kept underneath.
+    expect(within(configs).getByRole("option", { name: "4-shot · CoT · chat" })).toBeInTheDocument();
+    expect(
+      within(configs).getByRole("option", { name: "0-shot · CoT · completion" }),
+    ).toBeInTheDocument();
+    // The performance variant belongs to the other mode.
+    expect(within(configs).queryAllByRole("option")).toHaveLength(2);
+
+    await user.click(screen.getByRole("radio", { name: "性能评测" }));
+    expect(within(screen.getByLabelText("评测配置")).queryAllByRole("option")).toHaveLength(1);
+  });
+
+  it("submits the config the user picked, not just the first one", async () => {
+    const user = userEvent.setup();
+    let submitted: Record<string, unknown> = {};
+    server.use(
+      http.post("/api/jobs", async ({ request }) => {
+        submitted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ id: "j", status: "queued", queue_position: 1 }, { status: 201 });
+      }),
+    );
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await user.selectOptions(screen.getByLabelText("评测配置"), "gsm8k_gen_0_shot_cot_str");
+    await user.click(screen.getByRole("button", { name: "提交评测" }));
+
+    await screen.findByText("任务已进入队列");
+    expect(submitted.config_name).toBe("gsm8k_gen_0_shot_cot_str");
   });
 
   it("refuses to submit a mode the chosen dataset has no configuration for", async () => {
@@ -126,8 +198,8 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     const select = await screen.findByLabelText("数据集");
-    expect(within(select).getByRole("option", { name: /GSM8K/ })).toBeInTheDocument();
-    expect(within(select).queryByRole("option", { name: /MMLU/ })).not.toBeInTheDocument();
+    expect(within(select).getByRole("option", { name: /gsm8k/ })).toBeInTheDocument();
+    expect(within(select).queryByRole("option", { name: /mmlu/ })).not.toBeInTheDocument();
   });
 
   it("shows the server's refusal instead of pretending the job queued", async () => {
@@ -318,6 +390,47 @@ describe("my models", () => {
     expect(screen.getByText("Qwen3")).toBeInTheDocument();
   });
 
+  it("edits an existing endpoint and keeps the stored key when the box is left blank", async () => {
+    const user = userEvent.setup();
+    let patched: Record<string, unknown> = {};
+    server.use(
+      http.patch("/api/models/model-1", async ({ request }) => {
+        patched = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ ...MODEL, name: "renamed" });
+      }),
+    );
+    renderAt("/models");
+
+    await user.click(await screen.findByRole("button", { name: "编辑" }));
+    const address = screen.getByLabelText("服务地址");
+    expect(address).toHaveValue("http://127.0.0.1:8001/v1");
+    await user.clear(screen.getByLabelText("显示名称"));
+    await user.type(screen.getByLabelText("显示名称"), "renamed");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(patched.name).toBe("renamed"));
+    // A blank key box means "keep what is stored", not "clear it".
+    expect(patched).not.toHaveProperty("api_key");
+  });
+
+  it("replaces the key when a new one is typed while editing", async () => {
+    const user = userEvent.setup();
+    let patched: Record<string, unknown> = {};
+    server.use(
+      http.patch("/api/models/model-1", async ({ request }) => {
+        patched = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json(MODEL);
+      }),
+    );
+    renderAt("/models");
+
+    await user.click(await screen.findByRole("button", { name: "编辑" }));
+    await user.type(screen.getByLabelText("API Key"), "rotated-key");
+    await user.click(screen.getByRole("button", { name: "保存" }));
+
+    await waitFor(() => expect(patched.api_key).toBe("rotated-key"));
+  });
+
   it("deactivates an endpoint without deleting it", async () => {
     const user = userEvent.setup();
     let active = true;
@@ -349,8 +462,8 @@ describe("shared datasets", () => {
     );
     renderAt("/datasets");
 
-    const gsm8k = within(await screen.findByRole("row", { name: /GSM8K/ }));
-    const mmlu = within(screen.getByRole("row", { name: /MMLU/ }));
+    const gsm8k = within(await screen.findByRole("row", { name: /gsm8k/ }));
+    const mmlu = within(screen.getByRole("row", { name: /mmlu/ }));
     expect(gsm8k.getByRole("button", { name: "安装" })).toBeInTheDocument();
     expect(mmlu.queryByRole("button", { name: "安装" })).not.toBeInTheDocument();
   });
@@ -358,7 +471,7 @@ describe("shared datasets", () => {
   it("never offers to delete a shared dataset", async () => {
     renderAt("/datasets");
 
-    expect(await screen.findByText("GSM8K")).toBeInTheDocument();
+    expect(await screen.findByText("gsm8k")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "删除" })).not.toBeInTheDocument();
   });
 

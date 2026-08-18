@@ -1,6 +1,7 @@
 import hashlib
 import io
 import os
+import shutil
 import tarfile
 import time
 import zipfile
@@ -12,7 +13,14 @@ import pytest
 from fastapi import FastAPI
 
 from aisbench_web.app import create_app
-from aisbench_web.datasets.catalog import CatalogService, load_catalog, resolve_datasets_root
+from aisbench_web.datasets.catalog import (
+    CatalogEntry,
+    CatalogService,
+    DownloadSource,
+    load_catalog,
+    load_download_sources,
+    resolve_datasets_root,
+)
 from aisbench_web.datasets.installer import DatasetInstaller, extract_archive
 from aisbench_web.db import Database
 from aisbench_web.repositories.datasets import DatasetRepository
@@ -21,8 +29,12 @@ from conftest import ClientFactory
 
 
 @pytest.fixture
-def datasets_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
-    root = tmp_path / "site-packages" / "ais_bench" / "datasets"
+def datasets_root(
+    aisbench_configs: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Path:
+    root = tmp_path / "installed-datasets"
     root.mkdir(parents=True)
     monkeypatch.setenv("AISBENCH_DATASETS_DIR", str(root))
     return root
@@ -46,10 +58,20 @@ class _FakeUsage:
         self.used = 0
 
 
-def gsm8k_entry_for(payload: bytes):
-    """Repin the packaged GSM8K entry at a synthetic payload so verification still runs."""
+def gsm8k_entry_for(payload: bytes) -> CatalogEntry:
+    """Repin the GSM8K entry at a synthetic payload so verification still runs."""
     entry = next(entry for entry in load_catalog() if entry.id == "gsm8k")
-    return entry.replace(sha256=hashlib.sha256(payload).hexdigest(), size_bytes=len(payload))
+    return CatalogEntry(
+        id=entry.id,
+        install_path=entry.install_path,
+        required_path=entry.required_path,
+        configs=entry.configs,
+        download=DownloadSource(
+            url=entry.download.url,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            size_bytes=len(payload),
+        ),
+    )
 
 
 def build_zip(entries: dict[str, str]) -> bytes:
@@ -63,41 +85,52 @@ def build_zip(entries: dict[str, str]) -> bytes:
 # --- catalog -----------------------------------------------------------------
 
 
-def test_packaged_catalog_declares_every_field_the_service_needs() -> None:
-    entries = load_catalog()
+def test_catalog_is_read_from_the_installed_aisbench(aisbench_configs: Path) -> None:
+    """The installed AISBench is the authority on which datasets and variants exist."""
+    entries = {entry.id: entry for entry in load_catalog()}
 
-    assert {entry.id for entry in entries} >= {"gsm8k", "ceval", "mmlu"}
-    for entry in entries:
-        assert entry.name and entry.description and entry.relative_data_path
-        assert entry.accuracy_config
-        assert entry.dataset_symbol.endswith("_datasets")
-        assert entry.config_package
-        assert not Path(entry.relative_data_path).is_absolute()
-        assert ".." not in Path(entry.relative_data_path).parts
-
-
-def test_catalog_matches_the_verified_aisbench_layout() -> None:
-    by_id = {entry.id: entry for entry in load_catalog()}
-
-    assert by_id["gsm8k"].accuracy_config == "gsm8k_gen_4_shot_cot_chat_prompt"
-    assert by_id["gsm8k"].config_import_for("accuracy") == (
-        "ais_bench.benchmark.configs.datasets.gsm8k.gsm8k_gen_4_shot_cot_chat_prompt"
-    )
-    assert by_id["gsm8k"].dataset_symbol == "gsm8k_datasets"
-    assert by_id["mmlu"].config_import_for("performance") is None
-    assert by_id["gsm8k"].performance_config == "gsm8k_gen_0_shot_cot_str_perf"
-    assert by_id["ceval"].relative_data_path == "ceval/formal_ceval"
-    # The installed AISBench ships no mmlu *_perf config, so performance must stay unavailable.
-    assert by_id["mmlu"].performance_config is None
+    assert set(entries) == {"gsm8k", "mmlu", "synthetic"}
+    for entry in entries.values():
+        assert entry.configs
+        for config in entry.configs:
+            assert config.symbol.endswith("_datasets")
+            assert config.import_path.startswith("ais_bench.benchmark.configs.datasets.")
+        assert not Path(entry.install_path).is_absolute()
+        assert ".." not in Path(entry.install_path).parts
 
 
-def test_installable_entries_carry_a_verified_checksum() -> None:
-    """An entry that can install must be verifiable; an unpinned download is a silent swap."""
-    for entry in load_catalog():
-        if entry.download_url is None:
-            continue
-        assert entry.sha256 and len(entry.sha256) == 64
-        assert entry.size_bytes and entry.size_bytes > 0
+def test_catalog_separates_accuracy_and_performance_variants(aisbench_configs: Path) -> None:
+    entries = {entry.id: entry for entry in load_catalog()}
+
+    gsm8k = entries["gsm8k"]
+    assert [config.name for config in gsm8k.configs_for("accuracy")] == [
+        "gsm8k_gen_0_shot_cot_str",
+        "gsm8k_gen_4_shot_cot_chat_prompt",
+    ]
+    assert [config.name for config in gsm8k.configs_for("performance")] == [
+        "gsm8k_gen_0_shot_cot_str_perf"
+    ]
+    # A dataset AISBench ships no performance config for offers none.
+    assert entries["mmlu"].configs_for("performance") == ()
+
+
+def test_config_names_are_read_for_the_options_they_encode(aisbench_configs: Path) -> None:
+    entries = {entry.id: entry for entry in load_catalog()}
+    by_name = {config.name: config for config in entries["gsm8k"].configs}
+
+    four_shot = by_name["gsm8k_gen_4_shot_cot_chat_prompt"]
+    assert (four_shot.shots, four_shot.chain_of_thought, four_shot.chat_prompt) == (4, True, True)
+    zero_shot = by_name["gsm8k_gen_0_shot_cot_str"]
+    assert (zero_shot.shots, zero_shot.chain_of_thought, zero_shot.chat_prompt) == (0, True, False)
+
+
+def test_every_download_source_is_checksum_pinned() -> None:
+    """An unpinned download is a silent swap; an unverified target installs into nowhere."""
+    for directory, source in load_download_sources().items():
+        assert len(source.sha256) == 64
+        assert source.size_bytes > 0
+        assert source.url.endswith(".zip")
+        assert directory and "/" not in directory
 
 
 def test_datasets_root_prefers_the_environment_override(
@@ -144,22 +177,35 @@ def test_sync_marks_a_dataset_available_when_its_expected_path_exists(
     assert by_id["mmlu"].local_path is None
 
 
-def test_sync_reports_unlisted_directories_as_detected(
+def test_a_dataset_aisbench_no_longer_ships_is_forgotten(
     catalog_service: CatalogService,
-    datasets_root: Path,
     database: Database,
+    aisbench_configs: Path,
 ) -> None:
-    (datasets_root / "synthetic").mkdir()
+    """The catalog follows the installation; a stale row would offer a job that cannot run."""
+    catalog_service.sync()
+    assert {d.id for d in DatasetRepository(database).list_all()} == {
+        "gsm8k",
+        "mmlu",
+        "synthetic",
+    }
 
+    shutil.rmtree(aisbench_configs / "benchmark" / "configs" / "datasets" / "mmlu")
     catalog_service.sync()
 
-    detected = {
-        dataset.id: dataset
-        for dataset in DatasetRepository(database).list_all()
-        if dataset.status == "detected"
-    }
-    assert set(detected) == {"synthetic"}
-    assert detected["synthetic"].can_install is False
+    assert {d.id for d in DatasetRepository(database).list_all()} == {"gsm8k", "synthetic"}
+
+
+def test_only_a_dataset_with_a_verified_source_can_install(
+    catalog_service: CatalogService,
+    database: Database,
+) -> None:
+    catalog_service.sync()
+
+    by_id = {dataset.id: dataset for dataset in DatasetRepository(database).list_all()}
+    assert by_id["gsm8k"].can_install is True
+    # No archive is known to unpack where synthetic's configs read.
+    assert by_id["synthetic"].can_install is False
 
 
 def test_sync_clears_installing_left_behind_by_a_previous_process(
@@ -273,11 +319,11 @@ def test_install_downloads_extracts_and_renames_atomically(
     installer = DatasetInstaller(settings.downloads_dir, transport=httpx.MockTransport(serve))
     entry = gsm8k_entry_for(payload)
 
-    installed = installer.install(entry, datasets_root / entry.relative_data_path)
+    installed = installer.install(entry, datasets_root / entry.install_path)
 
     assert installed == datasets_root / "gsm8k"
     assert (installed / "test.jsonl").read_text() == '{"q": 1}'
-    assert observed == [entry.download_url]
+    assert observed == [entry.download.url]
     assert list(settings.downloads_dir.iterdir()) == []
     assert [path.name for path in datasets_root.iterdir()] == ["gsm8k"]
 
@@ -292,10 +338,16 @@ def test_install_rejects_a_checksum_mismatch_and_leaves_nothing_behind(
         transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=payload)),
     )
     entry = next(entry for entry in load_catalog() if entry.id == "gsm8k")
-    entry = entry.replace(sha256="0" * 64)
+    entry = CatalogEntry(
+        id=entry.id,
+        install_path=entry.install_path,
+        required_path=entry.required_path,
+        configs=entry.configs,
+        download=DownloadSource(url=entry.download.url, sha256="0" * 64, size_bytes=1),
+    )
 
     with pytest.raises(ValueError, match="checksum"):
-        installer.install(entry, datasets_root / entry.relative_data_path)
+        installer.install(entry, datasets_root / entry.install_path)
 
     assert list(datasets_root.iterdir()) == []
     assert list(settings.downloads_dir.iterdir()) == []
@@ -318,10 +370,18 @@ def test_install_fails_early_when_the_disk_cannot_hold_the_dataset(
         ),
     )
     entry = next(entry for entry in load_catalog() if entry.id == "gsm8k")
-    entry = entry.replace(size_bytes=10_000_000)
+    entry = CatalogEntry(
+        id=entry.id,
+        install_path=entry.install_path,
+        required_path=entry.required_path,
+        configs=entry.configs,
+        download=DownloadSource(
+            url=entry.download.url, sha256=entry.download.sha256, size_bytes=10_000_000
+        ),
+    )
 
     with pytest.raises(ValueError, match="disk space"):
-        installer.install(entry, datasets_root / entry.relative_data_path)
+        installer.install(entry, datasets_root / entry.install_path)
 
     assert requested == []
 
@@ -338,7 +398,7 @@ def test_install_rejects_an_unsafe_archive_without_touching_the_target(
     entry = gsm8k_entry_for(payload)
 
     with pytest.raises(ValueError, match="unsafe archive member"):
-        installer.install(entry, datasets_root / entry.relative_data_path)
+        installer.install(entry, datasets_root / entry.install_path)
 
     assert list(datasets_root.iterdir()) == []
 
@@ -395,7 +455,7 @@ async def test_a_failed_install_is_recorded_with_a_retryable_state(
 async def test_install_is_refused_for_datasets_without_a_reliable_source(
     client: httpx.AsyncClient,
 ) -> None:
-    response = await client.post("/api/datasets/mmlu/install")
+    response = await client.post("/api/datasets/synthetic/install")
 
     assert response.status_code == 409
     assert "install" in response.json()["detail"]

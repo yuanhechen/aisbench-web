@@ -31,7 +31,7 @@ export function JobsPage() {
 
   return (
     <>
-      <PageHeader title={t("nav.jobs")} subtitle={t("jobs.subtitle")} />
+      <PageHeader title={t("nav.jobs")} />
 
       <div className="filter-row">
         <label className="field" htmlFor="job-filter-status">
