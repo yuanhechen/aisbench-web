@@ -142,3 +142,117 @@ body {
   color: var(--text-secondary);
   margin: 4px 0 0;
 }
+
+.sidebar-footer-actions {
+  display: flex;
+  gap: 12px;
+  margin-top: 6px;
+}
+
+.link-button {
+  background: none;
+  border: 0;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.link-button:hover {
+  color: var(--text);
+}
+
+.auth-page {
+  align-items: center;
+  display: flex;
+  height: 100%;
+  justify-content: center;
+  padding: 24px;
+}
+
+.auth-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 320px;
+  width: 100%;
+}
+
+.auth-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0 0 8px;
+}
+
+.segmented {
+  background: var(--sidebar);
+  border-radius: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin-bottom: 12px;
+  padding: 2px;
+}
+
+.segmented-option {
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  padding: 6px 10px;
+}
+
+.segmented-option[aria-selected="true"] {
+  background: var(--canvas);
+  color: var(--text);
+  font-weight: 500;
+}
+
+.field {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin-top: 4px;
+}
+
+.field-hint {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  margin: 0;
+}
+
+.input {
+  background: var(--canvas);
+  border: 1px solid var(--selected);
+  border-radius: 8px;
+  color: var(--text);
+  font: inherit;
+  padding: 7px 10px;
+  width: 100%;
+}
+
+.input:focus {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.form-error {
+  color: var(--danger);
+  margin: 4px 0 0;
+}
+
+.button-primary {
+  background: var(--text);
+  border: 0;
+  border-radius: 8px;
+  color: var(--canvas);
+  cursor: pointer;
+  font: inherit;
+  margin-top: 12px;
+  padding: 8px 12px;
+}
+
+.button-primary:disabled {
+  opacity: 0.6;
+}

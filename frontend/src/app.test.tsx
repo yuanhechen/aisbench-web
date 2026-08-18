@@ -45,10 +45,11 @@ describe("App", () => {
     expect(screen.getByRole("link", { name: "GSM8K 精度" })).toHaveAttribute("href", "#/jobs/j1");
   });
 
-  it("shows no navigation at all when signed out", () => {
+  it("shows the sign-in form and no navigation when signed out", () => {
     render(<App initialUser={null} />);
 
     expect(screen.queryByRole("navigation")).not.toBeInTheDocument();
-    expect(screen.getByText("请登录后继续")).toBeInTheDocument();
+    expect(screen.getByLabelText("用户名")).toBeInTheDocument();
+    expect(screen.getByLabelText("密码")).toBeInTheDocument();
   });
 });
