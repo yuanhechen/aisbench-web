@@ -94,7 +94,7 @@ def test_concurrent_first_time_migrations_retry_locked_wal(tmp_path, monkeypatch
         versions = connection.execute(
             "SELECT version, COUNT(*) FROM schema_migrations GROUP BY version"
         ).fetchall()
-    assert [tuple(row) for row in versions] == [(1, 1), (2, 1), (3, 1), (4, 1)]
+    assert [tuple(row) for row in versions] == [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1)]
     assert all(connection.was_closed for connection in created_connections)
 
 
@@ -259,7 +259,7 @@ async def test_migration_2_upgrades_legacy_users_and_sessions_atomically(tmp_pat
                 ("user-1",),
             )
 
-    assert [row["version"] for row in versions] == [1, 2, 3, 4]
+    assert [row["version"] for row in versions] == [1, 2, 3, 4, 5]
     assert [row["id"] for row in sessions] != ["expired-session"]
     assert any("sessions_expires_at_idx" in detail for detail in expiry_query_plan)
 
@@ -355,8 +355,20 @@ def test_migration_2_accepts_transient_hardened_version_1_without_duplicate_inde
             == ("username_key",)
         ]
 
-    assert [row["version"] for row in versions] == [1, 2, 3, 4]
+    assert [row["version"] for row in versions] == [1, 2, 3, 4, 5]
     assert len(username_key_indexes) == 1
+
+
+def test_migration_5_adds_a_dataset_domain_defaulting_to_uncategorised(tmp_path):
+    database = Database(tmp_path / "domains.db")
+    database.migrate()
+
+    with database.connect() as connection:
+        column = {
+            row["name"]: row for row in connection.execute("PRAGMA table_info(datasets)")
+        }["category"]
+
+    assert (column["type"], column["notnull"], column["dflt_value"]) == ("TEXT", 1, "'other'")
 
 
 def test_migration_3_adds_progress_columns_and_leaves_existing_jobs_untouched(tmp_path):
@@ -375,10 +387,10 @@ def test_migrate_rejects_database_from_a_newer_schema_version(tmp_path):
     with database.connect() as connection:
         connection.execute(
             "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-            (5, "2026-01-01T00:00:00+00:00"),
+            (6, "2026-01-01T00:00:00+00:00"),
         )
 
-    with pytest.raises(RuntimeError, match=r"newer schema version 5"):
+    with pytest.raises(RuntimeError, match=r"newer schema version 6"):
         database.migrate()
 
 
@@ -422,7 +434,7 @@ def test_migrations_are_idempotent_and_record_version_once(tmp_path):
         applied_versions = connection.execute(
             "SELECT version, COUNT(*) FROM schema_migrations GROUP BY version"
         ).fetchall()
-    assert [tuple(row) for row in applied_versions] == [(1, 1), (2, 1), (3, 1), (4, 1)]
+    assert [tuple(row) for row in applied_versions] == [(1, 1), (2, 1), (3, 1), (4, 1), (5, 1)]
 
 
 def test_migration_creates_required_column_shapes(tmp_path):

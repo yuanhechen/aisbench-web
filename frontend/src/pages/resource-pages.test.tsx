@@ -43,6 +43,7 @@ const GSM8K = {
   name: "gsm8k",
   description: "",
   config_name: "gsm8k_gen_4_shot_cot_chat_prompt",
+  category: "llm",
   configs: GSM8K_CONFIGS,
   status: "available",
   local_path: "/data/gsm8k",
@@ -54,6 +55,7 @@ const MMLU = {
   ...GSM8K,
   id: "mmlu",
   name: "mmlu",
+  category: "llm",
   config_name: "mmlu_gen_5_shot_chat_prompt",
   // AISBench ships no performance config for this dataset.
   configs: [
@@ -466,6 +468,50 @@ describe("shared datasets", () => {
     const mmlu = within(screen.getByRole("row", { name: /mmlu/ }));
     expect(gsm8k.getByRole("button", { name: "安装" })).toBeInTheDocument();
     expect(mmlu.queryByRole("button", { name: "安装" })).not.toBeInTheDocument();
+  });
+
+  it("narrows by a search that matches dataset or config IDs", async () => {
+    const user = userEvent.setup();
+    renderAt("/datasets");
+
+    expect(await screen.findByText("gsm8k")).toBeInTheDocument();
+    await user.type(screen.getByLabelText("搜索数据集"), "mmlu_gen_5");
+
+    expect(screen.getByText("mmlu")).toBeInTheDocument();
+    expect(screen.queryByText("gsm8k")).not.toBeInTheDocument();
+  });
+
+  it("narrows by the domain the AISBench documentation puts a dataset in", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/datasets", () =>
+        HttpResponse.json([GSM8K, { ...MMLU, id: "textvqa", name: "textvqa", category: "multimodal" }]),
+      ),
+    );
+    renderAt("/datasets");
+
+    expect(await screen.findByText("gsm8k")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "多模态" }));
+
+    expect(screen.getByText("textvqa")).toBeInTheDocument();
+    expect(screen.queryByText("gsm8k")).not.toBeInTheDocument();
+  });
+
+  it("offers only the domains something is actually in", async () => {
+    server.use(http.get("/api/datasets", () => HttpResponse.json([GSM8K])));
+    renderAt("/datasets");
+
+    expect(await screen.findByRole("button", { name: "LLM" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "多模态" })).not.toBeInTheDocument();
+  });
+
+  it("says so when nothing matches instead of showing an empty table", async () => {
+    const user = userEvent.setup();
+    renderAt("/datasets");
+
+    await user.type(await screen.findByLabelText("搜索数据集"), "nothing-matches-this");
+
+    expect(await screen.findByText("没有匹配的数据集。")).toBeInTheDocument();
   });
 
   it("never offers to delete a shared dataset", async () => {

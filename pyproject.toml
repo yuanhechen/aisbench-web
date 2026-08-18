@@ -32,7 +32,7 @@ aisbench-web = "aisbench_web.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-aisbench_web = ["static/*", "static/assets/*", "datasets/downloads.json"]
+aisbench_web = ["static/*", "static/assets/*", "datasets/*.json"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -17,6 +17,8 @@ from aisbench_web.settings import Settings
 logger = logging.getLogger(__name__)
 
 DOWNLOADS_RESOURCE = "downloads.json"
+CATEGORIES_RESOURCE = "categories.json"
+UNCATEGORISED = "other"
 STALE_PART_AGE_SECONDS = 24 * 60 * 60
 
 
@@ -36,6 +38,8 @@ class CatalogEntry:
     required_path: str | None
     configs: tuple[DatasetConfig, ...]
     download: DownloadSource | None
+    #: Domain from the AISBench documentation, or "other" when it lists none.
+    category: str = UNCATEGORISED
 
     @property
     def can_install(self) -> bool:
@@ -68,6 +72,29 @@ def load_download_sources() -> dict[str, DownloadSource]:
         )
         for directory, source in raw["downloads"].items()
     }
+
+
+@lru_cache(maxsize=1)
+def load_categories() -> dict[str, str]:
+    """Map a dataset directory to the domain the AISBench documentation puts it in.
+
+    The documentation is the only place these domains are published; nothing in the installed
+    package records them. A dataset the documentation does not list stays uncategorised rather
+    than being guessed into a domain.
+    """
+    package = resources.files("aisbench_web.datasets")
+    raw = json.loads(package.joinpath(CATEGORIES_RESOURCE).read_text(encoding="utf-8"))
+    documented = {
+        name.casefold(): category
+        for category, names in raw["categories"].items()
+        for name in names
+    }
+    # A directory whose name differs from the one the documentation prints.
+    for directory, documented_name in raw.get("aliases", {}).items():
+        category = documented.get(documented_name.casefold())
+        if category is not None:
+            documented[directory.casefold()] = category
+    return documented
 
 
 def resolve_ais_bench_package() -> Path | None:
@@ -107,6 +134,7 @@ def load_catalog() -> tuple[CatalogEntry, ...]:
 
 def _entries_for(scanned: tuple[ScannedDataset, ...]) -> tuple[CatalogEntry, ...]:
     sources = load_download_sources()
+    categories = load_categories()
     return tuple(
         CatalogEntry(
             id=dataset.id,
@@ -114,6 +142,7 @@ def _entries_for(scanned: tuple[ScannedDataset, ...]) -> tuple[CatalogEntry, ...
             required_path=dataset.required_path,
             configs=dataset.configs,
             download=sources.get(dataset.install_path or ""),
+            category=categories.get(dataset.id.casefold(), UNCATEGORISED),
         )
         for dataset in scanned
     )
@@ -152,6 +181,7 @@ class CatalogService:
                 size_bytes=None if entry.download is None else entry.download.size_bytes,
                 local_path=None if installed is None else str(installed),
                 status=DatasetStatus.AVAILABLE if installed else DatasetStatus.NOT_INSTALLED,
+                category=entry.category,
                 updated_at=timestamp,
             )
         self.repository.forget_datasets_other_than([entry.id for entry in entries])

@@ -1,0 +1,77 @@
+{
+  "source": "https://yh-ais-bench-benchmark.readthedocs.io/zh-cn/latest/base_tutorials/all_params/datasets.html",
+  "categories": {
+    "llm": [
+      "DEMO",
+      "ARC_c",
+      "ARC_e",
+      "SuperGLUE_BoolQ",
+      "agieval",
+      "aime2024",
+      "aime2025",
+      "bbh",
+      "cmmlu",
+      "ceval",
+      "drop",
+      "gsm8k",
+      "gpqa",
+      "hellaswag",
+      "humaneval",
+      "humanevalx",
+      "ifeval",
+      "lambada",
+      "lcsts",
+      "livecodebench",
+      "longbench",
+      "longbenchv2",
+      "math",
+      "mbpp",
+      "mgsm",
+      "mmlu",
+      "mmlu_pro",
+      "needlebench_v2",
+      "piqa",
+      "siqa",
+      "triviaqa",
+      "winogrande",
+      "Xsum",
+      "BFCL",
+      "FewCLUE_bustm",
+      "FewCLUE_chid",
+      "FewCLUE_cluewsc",
+      "FewCLUE_csl",
+      "FewCLUE_eprstmt",
+      "FewCLUE_tnews"
+    ],
+    "multimodal": [
+      "textvqa",
+      "videobench",
+      "vocalsound",
+      "Omnidocbench",
+      "MMMU",
+      "MMMU_Pro",
+      "InfoVQA",
+      "DocVQA",
+      "MMStar",
+      "OcrBench",
+      "Video-MME"
+    ],
+    "dialogue": [
+      "sharegpt",
+      "mtbench"
+    ],
+    "synthetic": [
+      "synthetic_gen"
+    ],
+    "custom": [
+      "custom"
+    ]
+  },
+  "aliases": {
+    "ocrbench_v2": "OcrBench",
+    "videomme": "Video-MME",
+    "synthetic": "synthetic_gen",
+    "demo": "DEMO"
+  },
+  "note": "Dataset domains as published in the AISBench documentation. Aliases map a directory name to the name the documentation uses. A dataset absent from the documentation is reported as uncategorised rather than guessed at."
+}

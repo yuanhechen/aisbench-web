@@ -1,2 +1,2 @@
 recursive-include src/aisbench_web/static *
-include src/aisbench_web/datasets/downloads.json
+recursive-include src/aisbench_web/datasets *.json

@@ -632,3 +632,34 @@ select.input {
   gap: 10px;
   margin-top: 4px;
 }
+
+.search-input {
+  max-width: 260px;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  background: var(--canvas);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  padding: 3px 10px;
+}
+
+.chip:hover {
+  border-color: var(--selected);
+}
+
+.chip[aria-pressed="true"] {
+  background: var(--sidebar);
+  border-color: var(--selected);
+  color: var(--text);
+}
