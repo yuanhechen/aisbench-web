@@ -159,6 +159,11 @@ MODEL_ABBR = re.compile(r"""abbr\s*=\s*['"]([^'"]+)['"]""")
 MODEL_STREAM = re.compile(r"stream\s*=\s*(True|False)")
 # Only a service config drives an HTTP endpoint; the rest need a model file on disk.
 SERVICE_ATTR = "service"
+# Structural fallback for a config that does not declare `attr`: an HTTP endpoint has to say
+# where the endpoint is, while an offline config points at a path on disk instead. Only the
+# vllm_api family has been seen first hand, so recognising a family must not depend on it
+# spelling itself the same way.
+ENDPOINT_FIELDS = re.compile(r"\b(host_ip|host_port|url)\s*=")
 
 
 @dataclass(frozen=True)
@@ -200,6 +205,10 @@ def scan_model_configs(ais_bench_package: Path) -> tuple[ModelConfig, ...]:
             model_type = MODEL_TYPE.search(source)
             abbr = MODEL_ABBR.search(source)
             stream = MODEL_STREAM.search(source)
+            if attr is not None:
+                is_service = attr.group(1) == SERVICE_ATTR
+            else:
+                is_service = ENDPOINT_FIELDS.search(source) is not None
             found.append(
                 ModelConfig(
                     name=config_file.stem,
@@ -207,7 +216,7 @@ def scan_model_configs(ais_bench_package: Path) -> tuple[ModelConfig, ...]:
                     class_name="" if model_type is None else model_type.group(1),
                     abbr="" if abbr is None else abbr.group(1),
                     stream=stream is not None and stream.group(1) == "True",
-                    is_service=attr is not None and attr.group(1) == SERVICE_ATTR,
+                    is_service=is_service,
                 )
             )
     return tuple(found)
