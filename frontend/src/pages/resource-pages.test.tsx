@@ -170,11 +170,9 @@ describe("new evaluation", () => {
     });
     expect(option).toBeInTheDocument();
 
-    // The model class is not in the file name, so it groups the options instead.
+    // Full names, sorted flat: the family prefix groups them without a heading repeating it.
     const models = screen.getByLabelText("模型配置");
-    expect([...models.querySelectorAll("optgroup")].map((g) => g.label)).toEqual([
-      "VLLMCustomAPIChat",
-    ]);
+    expect(models.querySelectorAll("optgroup")).toHaveLength(0);
     expect(
       within(models).getByRole("option", { name: "vllm_api_general_chat" }),
     ).toBeInTheDocument();

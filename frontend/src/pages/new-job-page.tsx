@@ -103,14 +103,12 @@ export function NewJobPage() {
     () => (selectedDataset?.configs ?? []).filter((config) => config.mode === form.mode),
     [selectedDataset, form.mode],
   );
-  // The class is the one thing a file name does not say, so it groups rather than repeats.
-  const modelConfigsByClass = useMemo(() => {
-    const grouped = new Map<string, ModelConfigOption[]>();
-    for (const config of modelConfigs.data ?? []) {
-      grouped.set(config.class_name, [...(grouped.get(config.class_name) ?? []), config]);
-    }
-    return [...grouped.entries()];
-  }, [modelConfigs.data]);
+  // Sorted flat: the family prefix already groups these visually, and a class grouping
+  // repeated the prefix while splitting one serving stack across several headings.
+  const sortedModelConfigs = useMemo(
+    () => [...(modelConfigs.data ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
+    [modelConfigs.data],
+  );
 
   const modeUnsupported = selectedDataset !== null && availableConfigs.length === 0;
   const selectedConfig =
@@ -240,14 +238,10 @@ export function NewJobPage() {
               onChange={(event) => update("modelConfigName", event.target.value)}
             >
               <option value="">{t("newJob.modelConfigDefault")}</option>
-              {modelConfigsByClass.map(([className, configs]) => (
-                <optgroup key={className} label={className}>
-                  {configs.map((config) => (
-                    <option key={config.name} value={config.name}>
-                      {config.name}
-                    </option>
-                  ))}
-                </optgroup>
+              {sortedModelConfigs.map((config) => (
+                <option key={config.name} value={config.name}>
+                  {config.name}
+                </option>
               ))}
             </select>
             <p className="field-hint">{t("newJob.modelConfigHint")}</p>

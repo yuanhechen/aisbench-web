@@ -175,7 +175,19 @@ def load_model_configs() -> tuple[ModelConfig, ...]:
     package = _configs_package()
     if package is None:
         return ()
-    return tuple(config for config in scan_model_configs(package) if config.is_service)
+    scanned = scan_model_configs(package)
+    offered = tuple(config for config in scanned if config.is_service)
+    skipped = [config.name for config in scanned if not config.is_service]
+    if skipped:
+        # Expected for offline model configs. If an API family is in here, its config
+        # declares itself in a way this does not recognise, and it will simply be absent.
+        logger.info(
+            "Model configs not offered as endpoints (%s of %s): %s",
+            len(skipped),
+            len(scanned),
+            ", ".join(sorted(skipped)),
+        )
+    return offered
 
 
 def load_catalog() -> tuple[CatalogEntry, ...]:

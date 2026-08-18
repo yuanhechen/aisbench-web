@@ -515,3 +515,16 @@ async def test_model_configs_require_authentication(
     anonymous_client: httpx.AsyncClient,
 ) -> None:
     assert (await anonymous_client.get("/api/models/configs")).status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_a_config_that_is_not_offered_is_reported_rather_than_vanishing(
+    client: httpx.AsyncClient,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An API family that declares itself differently would simply be absent otherwise."""
+    with caplog.at_level("INFO", logger="aisbench_web.datasets.catalog"):
+        await client.get("/api/models/configs")
+
+    assert any("not offered as endpoints" in record.message for record in caplog.records)
+    assert any("vllm_qwen" in record.getMessage() for record in caplog.records)
