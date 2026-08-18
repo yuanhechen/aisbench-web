@@ -164,7 +164,10 @@ MIGRATION_4 = (
 # Dataset domains come from the AISBench documentation and are shown as a filter.
 MIGRATION_5 = ("ALTER TABLE datasets ADD COLUMN category TEXT NOT NULL DEFAULT 'other'",)
 
-LATEST_SCHEMA_VERSION = 5
+# The documentation also prints a task type per dataset; it is shown and searched.
+MIGRATION_6 = ("ALTER TABLE datasets ADD COLUMN task TEXT NOT NULL DEFAULT ''",)
+
+LATEST_SCHEMA_VERSION = 6
 
 
 class Database:
@@ -222,6 +225,7 @@ class Database:
                 (3, self._apply_migration_3),
                 (4, self._apply_migration_4),
                 (5, self._apply_migration_5),
+                (6, self._apply_migration_6),
             )
             pending = [(version, apply) for version, apply in migrations if version not in applied]
             if not pending:
@@ -244,6 +248,11 @@ class Database:
     @staticmethod
     def _apply_migration_1(connection: sqlite3.Connection) -> None:
         for statement in MIGRATION_1:
+            connection.execute(statement)
+
+    @staticmethod
+    def _apply_migration_6(connection: sqlite3.Connection) -> None:
+        for statement in MIGRATION_6:
             connection.execute(statement)
 
     @staticmethod

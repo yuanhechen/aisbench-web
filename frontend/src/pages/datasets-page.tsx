@@ -55,6 +55,7 @@ export function DatasetsPage() {
   const [watching, setWatching] = useState(false);
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState(ALL);
+  const [task, setTask] = useState(ALL);
   const describeConfigs = useConfigSummary();
   // Installs run in the background on the server, so the shared rows are polled -- but only
   // while one is actually running. A settled catalog does not change on its own.
@@ -91,23 +92,38 @@ export function DatasetsPage() {
     () => CATEGORY_ORDER.filter((name) => all.some((dataset) => dataset.category === name)),
     [all],
   );
+  // Only offer a task something is actually in, in the order the table shows them.
+  const presentTasks = useMemo(() => {
+    const seen = new Set<string>();
+    for (const dataset of all) {
+      if (dataset.task !== "" && (category === ALL || dataset.category === category)) {
+        seen.add(dataset.task);
+      }
+    }
+    return [...seen].sort((left, right) => left.localeCompare(right, "zh-Hans-CN"));
+  }, [all, category]);
+
   const visible = useMemo(() => {
     const needle = query.trim().toLowerCase();
     return all.filter((dataset) => {
       if (category !== ALL && dataset.category !== category) {
         return false;
       }
+      if (task !== ALL && dataset.task !== task) {
+        return false;
+      }
       if (needle === "") {
         return true;
       }
-      // Search what is on screen: the dataset and the config IDs it offers.
+      // Search what is on screen: the dataset, its task, and the config IDs it offers.
       return (
         dataset.id.toLowerCase().includes(needle) ||
+        dataset.task.toLowerCase().includes(needle) ||
         dataset.config_name.toLowerCase().includes(needle) ||
         dataset.configs.some((config) => config.name.toLowerCase().includes(needle))
       );
     });
-  }, [all, category, query]);
+  }, [all, category, task, query]);
 
   function statusOf(dataset: Dataset): Dataset["status"] {
     if (dataset.status === "available" || dataset.status === "failed") {
@@ -140,7 +156,10 @@ export function DatasetsPage() {
             type="button"
             className="chip"
             aria-pressed={category === ALL}
-            onClick={() => setCategory(ALL)}
+            onClick={() => {
+              setCategory(ALL);
+              setTask(ALL);
+            }}
           >
             {t("jobs.filterAll")}
           </button>
@@ -150,12 +169,31 @@ export function DatasetsPage() {
               type="button"
               className="chip"
               aria-pressed={category === name}
-              onClick={() => setCategory(name)}
+              onClick={() => {
+                setCategory(name);
+                // A task belongs to one domain; switching domains invalidates the choice.
+                setTask(ALL);
+              }}
             >
               {t(CATEGORY_LABELS[name])}
             </button>
           ))}
         </div>
+        {presentTasks.length > 1 && (
+          <select
+            className="input task-select"
+            aria-label={t("datasets.task")}
+            value={task}
+            onChange={(event) => setTask(event.target.value)}
+          >
+            <option value={ALL}>{t("datasets.allTasks")}</option>
+            {presentTasks.map((name) => (
+              <option key={name} value={name}>
+                {name}
+              </option>
+            ))}
+          </select>
+        )}
       </div>
       {error !== null && (
         <p className="form-error" role="alert">
@@ -178,7 +216,10 @@ export function DatasetsPage() {
               <tr key={dataset.id}>
                 <td>
                   <div className="resource-title">{dataset.name}</div>
-                  <div className="resource-meta">{describeConfigs(dataset)}</div>
+                  <div className="resource-meta">
+                    {dataset.task !== "" && <span className="task-tag">{dataset.task}</span>}
+                    <span>{describeConfigs(dataset)}</span>
+                  </div>
                   {dataset.error_message !== null && (
                     <div className="probe-failed">{dataset.error_message}</div>
                   )}

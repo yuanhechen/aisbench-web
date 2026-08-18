@@ -44,6 +44,7 @@ const GSM8K = {
   description: "",
   config_name: "gsm8k_gen_4_shot_cot_chat_prompt",
   category: "llm",
+  task: "数学推理",
   configs: GSM8K_CONFIGS,
   status: "available",
   local_path: "/data/gsm8k",
@@ -56,6 +57,7 @@ const MMLU = {
   id: "mmlu",
   name: "mmlu",
   category: "llm",
+  task: "多学科理解（英文）",
   config_name: "mmlu_gen_5_shot_chat_prompt",
   // AISBench ships no performance config for this dataset.
   configs: [
@@ -485,7 +487,16 @@ describe("shared datasets", () => {
     const user = userEvent.setup();
     server.use(
       http.get("/api/datasets", () =>
-        HttpResponse.json([GSM8K, { ...MMLU, id: "textvqa", name: "textvqa", category: "multimodal" }]),
+        HttpResponse.json([
+          GSM8K,
+          {
+            ...MMLU,
+            id: "textvqa",
+            name: "textvqa",
+            category: "multimodal",
+            task: "多模态理解（图+文）",
+          },
+        ]),
       ),
     );
     renderAt("/datasets");
@@ -494,6 +505,35 @@ describe("shared datasets", () => {
     await user.click(screen.getByRole("button", { name: "多模态" }));
 
     expect(screen.getByText("textvqa")).toBeInTheDocument();
+    expect(screen.queryByText("gsm8k")).not.toBeInTheDocument();
+  });
+
+  it("shows the task type the documentation gives each dataset", async () => {
+    renderAt("/datasets");
+
+    // Scoped to the table: the same words are also options in the task filter.
+    const table = await screen.findByRole("table");
+    expect(within(table).getByText("数学推理")).toBeInTheDocument();
+    expect(within(table).getByText("多学科理解（英文）")).toBeInTheDocument();
+  });
+
+  it("narrows by task type", async () => {
+    const user = userEvent.setup();
+    renderAt("/datasets");
+
+    await user.selectOptions(await screen.findByLabelText("任务类型"), "数学推理");
+
+    expect(screen.getByText("gsm8k")).toBeInTheDocument();
+    expect(screen.queryByText("mmlu")).not.toBeInTheDocument();
+  });
+
+  it("finds a dataset by searching its task type", async () => {
+    const user = userEvent.setup();
+    renderAt("/datasets");
+
+    await user.type(await screen.findByLabelText("搜索数据集"), "多学科");
+
+    expect(screen.getByText("mmlu")).toBeInTheDocument();
     expect(screen.queryByText("gsm8k")).not.toBeInTheDocument();
   });
 

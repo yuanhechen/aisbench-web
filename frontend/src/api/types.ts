@@ -21,6 +21,7 @@ export interface Dataset {
   description: string;
   config_name: string;
   category: string;
+  task: string;
   configs: DatasetConfig[];
   status: "not_installed" | "installing" | "available" | "failed" | "detected";
   local_path: string | null;

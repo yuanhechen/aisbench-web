@@ -36,6 +36,16 @@ watching = true;
 
 /** Each measurement runs on the page that actually contains the elements. */
 const measurements = {};
+// Wait for the page to have settled on real content. A fixed timeout over a slow link
+// measures an empty page and reports a confident zero.
+const SETTLED = {
+  "new-job": "#job-dataset option:nth-child(2), .form-error",
+  jobs: ".data-table tbody tr, .empty-state",
+  comparison: ".checkbox-option, .empty-state",
+  models: ".resource-row, .empty-state",
+  datasets: ".data-table tbody tr, .empty-state",
+};
+
 const pages = [
   ["new-job", "新建评测", () => ({
     modelOptions: [...document.querySelectorAll("#job-model option")].length - 1,
@@ -52,7 +62,13 @@ const pages = [
 for (const [name, link, measure] of pages) {
   await page.getByRole("link", { name: link }).click();
   await page.waitForLoadState("networkidle");
-  await page.waitForTimeout(1200);
+  try {
+    // "attached", not the default "visible": an <option> inside a closed <select> is
+    // never visible, which would report a rendered page as empty.
+    await page.waitForSelector(SETTLED[name], { state: "attached", timeout: 20000 });
+  } catch {
+    problems.push(`${name} never showed content or an empty state`);
+  }
   await page.screenshot({ path: `${OUT}-${name}.png` });
   Object.assign(measurements, await page.evaluate(measure));
 }

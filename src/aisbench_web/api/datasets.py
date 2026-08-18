@@ -34,6 +34,7 @@ class DatasetResponse(BaseModel):
     description: str
     config_name: str
     category: str
+    task: str
     configs: list[DatasetConfigResponse]
     status: str
     local_path: str | None
@@ -49,6 +50,7 @@ class DatasetResponse(BaseModel):
             description=dataset.description,
             config_name=dataset.config_name,
             category=dataset.category,
+            task=dataset.task,
             configs=[
                 DatasetConfigResponse(
                     name=config.name,

@@ -40,6 +40,8 @@ class CatalogEntry:
     download: DownloadSource | None
     #: Domain from the AISBench documentation, or "other" when it lists none.
     category: str = UNCATEGORISED
+    #: Task type the documentation prints for this dataset, empty when it lists none.
+    task: str = ""
 
     @property
     def can_install(self) -> bool:
@@ -72,6 +74,19 @@ def load_download_sources() -> dict[str, DownloadSource]:
         )
         for directory, source in raw["downloads"].items()
     }
+
+
+@lru_cache(maxsize=1)
+def load_tasks() -> dict[str, str]:
+    """Map a dataset directory to the task type the documentation prints for it."""
+    package = resources.files("aisbench_web.datasets")
+    raw = json.loads(package.joinpath(CATEGORIES_RESOURCE).read_text(encoding="utf-8"))
+    tasks = {name.casefold(): task for name, task in raw.get("tasks", {}).items()}
+    for directory, documented_name in raw.get("aliases", {}).items():
+        task = tasks.get(documented_name.casefold())
+        if task is not None:
+            tasks[directory.casefold()] = task
+    return tasks
 
 
 @lru_cache(maxsize=1)
@@ -135,6 +150,7 @@ def load_catalog() -> tuple[CatalogEntry, ...]:
 def _entries_for(scanned: tuple[ScannedDataset, ...]) -> tuple[CatalogEntry, ...]:
     sources = load_download_sources()
     categories = load_categories()
+    tasks = load_tasks()
     return tuple(
         CatalogEntry(
             id=dataset.id,
@@ -143,6 +159,7 @@ def _entries_for(scanned: tuple[ScannedDataset, ...]) -> tuple[CatalogEntry, ...
             configs=dataset.configs,
             download=sources.get(dataset.install_path or ""),
             category=categories.get(dataset.id.casefold(), UNCATEGORISED),
+            task=tasks.get(dataset.id.casefold(), ""),
         )
         for dataset in scanned
     )
@@ -182,6 +199,7 @@ class CatalogService:
                 local_path=None if installed is None else str(installed),
                 status=DatasetStatus.AVAILABLE if installed else DatasetStatus.NOT_INSTALLED,
                 category=entry.category,
+                task=entry.task,
                 updated_at=timestamp,
             )
         self.repository.forget_datasets_other_than([entry.id for entry in entries])

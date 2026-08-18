@@ -663,3 +663,16 @@ select.input {
   border-color: var(--selected);
   color: var(--text);
 }
+
+.task-select {
+  max-width: 220px;
+  width: auto;
+}
+
+.task-tag {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  padding: 1px 8px;
+}

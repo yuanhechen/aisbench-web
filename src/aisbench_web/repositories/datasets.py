@@ -15,7 +15,7 @@ class DatasetStatus(str, Enum):
 
 SELECTED_COLUMNS = (
     "id, config_name, name, description, status, local_path, download_url, "
-    "size_bytes, error_message, category"
+    "size_bytes, error_message, category, task"
 )
 
 
@@ -31,6 +31,7 @@ class Dataset:
     size_bytes: int | None
     error_message: str | None
     category: str
+    task: str
 
     @property
     def can_install(self) -> bool:
@@ -56,6 +57,7 @@ class DatasetRepository:
         local_path: str | None,
         status: DatasetStatus,
         category: str,
+        task: str,
         updated_at: str,
     ) -> None:
         with self.database.connect() as connection:
@@ -63,9 +65,9 @@ class DatasetRepository:
                 """
                 INSERT INTO datasets (
                   id, config_name, name, description, status, local_path,
-                  download_url, sha256, size_bytes, error_message, category,
+                  download_url, sha256, size_bytes, error_message, category, task,
                   installed_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                   config_name = excluded.config_name,
                   name = excluded.name,
@@ -77,6 +79,7 @@ class DatasetRepository:
                   size_bytes = excluded.size_bytes,
                   error_message = NULL,
                   category = excluded.category,
+                  task = excluded.task,
                   installed_at = excluded.installed_at,
                   updated_at = excluded.updated_at
                 """,
@@ -91,6 +94,7 @@ class DatasetRepository:
                     sha256,
                     size_bytes,
                     category,
+                    task,
                     updated_at if local_path else None,
                     updated_at,
                 ),
@@ -116,6 +120,7 @@ class DatasetRepository:
             local_path=local_path,
             status=DatasetStatus.DETECTED,
             category="other",
+            task="",
             updated_at=updated_at,
         )
 
