@@ -157,6 +157,29 @@ describe("new evaluation", () => {
     expect(submitted.parameters).toMatchObject({ max_num_workers: 4 });
   });
 
+  it("names a config once, without restating what the name already says", async () => {
+    const user = userEvent.setup();
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+
+    // "gen", "4_shot", "cot" and "chat" are in the file name; repeating them adds nothing.
+    const option = within(screen.getByLabelText("评测配置")).getByRole("option", {
+      name: "gsm8k_gen_0_shot_cot_str",
+    });
+    expect(option).toBeInTheDocument();
+
+    // The model class is not in the file name, so it groups the options instead.
+    const models = screen.getByLabelText("模型配置");
+    expect([...models.querySelectorAll("optgroup")].map((g) => g.label)).toEqual([
+      "VLLMCustomAPIChat",
+    ]);
+    expect(
+      within(models).getByRole("option", { name: "vllm_api_general_chat" }),
+    ).toBeInTheDocument();
+  });
+
   it("lets the model class be chosen, as the command line does", async () => {
     const user = userEvent.setup();
     let submitted: Record<string, unknown> = {};
@@ -202,9 +225,9 @@ describe("new evaluation", () => {
     await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
 
     const configs = screen.getByLabelText("评测配置");
-    // AISBench's own file name identifies the option; attributes only annotate it.
+    // The file name is the whole label: every attribute it could carry is already in it.
     expect(
-      within(configs).getByRole("option", { name: /^gsm8k_gen_4_shot_cot_chat_prompt/ }),
+      within(configs).getByRole("option", { name: "gsm8k_gen_4_shot_cot_chat_prompt" }),
     ).toBeInTheDocument();
     // Two configs that share every derived attribute must remain separately selectable.
     expect(

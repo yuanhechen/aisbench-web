@@ -3,13 +3,7 @@ import { useNavigate } from "react-router-dom";
 import type { FormEvent } from "react";
 
 import { api } from "../api/client";
-import type {
-  Dataset,
-  DatasetConfig,
-  Job,
-  ModelConfigOption,
-  ModelEndpoint,
-} from "../api/types";
+import type { Dataset, Job, ModelConfigOption, ModelEndpoint } from "../api/types";
 import { useApiQuery } from "../api/use-query";
 import { useAuth } from "../auth/auth-context";
 import { useI18n } from "../i18n/i18n-context";
@@ -109,6 +103,15 @@ export function NewJobPage() {
     () => (selectedDataset?.configs ?? []).filter((config) => config.mode === form.mode),
     [selectedDataset, form.mode],
   );
+  // The class is the one thing a file name does not say, so it groups rather than repeats.
+  const modelConfigsByClass = useMemo(() => {
+    const grouped = new Map<string, ModelConfigOption[]>();
+    for (const config of modelConfigs.data ?? []) {
+      grouped.set(config.class_name, [...(grouped.get(config.class_name) ?? []), config]);
+    }
+    return [...grouped.entries()];
+  }, [modelConfigs.data]);
+
   const modeUnsupported = selectedDataset !== null && availableConfigs.length === 0;
   const selectedConfig =
     availableConfigs.find((config) => config.name === form.configName) ??
@@ -237,13 +240,14 @@ export function NewJobPage() {
               onChange={(event) => update("modelConfigName", event.target.value)}
             >
               <option value="">{t("newJob.modelConfigDefault")}</option>
-              {(modelConfigs.data ?? []).map((config) => (
-                <option key={config.name} value={config.name}>
-                  {config.name}
-                  {"\u2003"}
-                  {config.class_name}
-                  {config.stream ? " · stream" : ""}
-                </option>
+              {modelConfigsByClass.map(([className, configs]) => (
+                <optgroup key={className} label={className}>
+                  {configs.map((config) => (
+                    <option key={config.name} value={config.name}>
+                      {config.name}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
             <p className="field-hint">{t("newJob.modelConfigHint")}</p>
@@ -308,8 +312,6 @@ export function NewJobPage() {
               {availableConfigs.map((config) => (
                 <option key={config.name} value={config.name}>
                   {config.name}
-                  {"\u2003"}
-                  {describeConfig(config)}
                   {config.name === selectedDataset?.default_config
                     ? `\u2003${t("newJob.configDefault")}`
                     : ""}
@@ -504,27 +506,6 @@ export function NewJobPage() {
       </section>
     </form>
   );
-}
-
-/**
- * Attributes read off a config file name, for display beside it.
- *
- * Never in place of it: several configs in one dataset can share every attribute, so the file
- * name is the only thing that identifies which one AISBench will run.
- */
-function describeConfig(config: DatasetConfig): string {
-  const parts: string[] = [];
-  if (config.method !== "") {
-    parts.push(config.method);
-  }
-  if (config.shots !== null) {
-    parts.push(`${config.shots}-shot`);
-  }
-  if (config.chain_of_thought) {
-    parts.push("CoT");
-  }
-  parts.push(config.chat_prompt ? "chat" : "completion");
-  return parts.join(" · ");
 }
 
 function NumberField({
