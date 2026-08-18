@@ -1,4 +1,3 @@
-import { useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import {
   BarChart3,
@@ -7,13 +6,25 @@ import {
   ListChecks,
   PlusCircle,
 } from "lucide-react";
+import {
+  BrowserRouter,
+  MemoryRouter,
+  NavLink,
+  Navigate,
+  Route,
+  Routes,
+} from "react-router-dom";
 
-import { api } from "./api/client";
 import { AuthProvider, useAuth } from "./auth/auth-context";
 import type { CurrentUser } from "./auth/auth-context";
 import { I18nProvider, useI18n } from "./i18n/i18n-context";
 import type { MessageKey } from "./i18n/messages";
 import { AuthPage } from "./pages/auth-page";
+import { ComparisonPage } from "./pages/comparison-page";
+import { DatasetsPage } from "./pages/datasets-page";
+import { JobsPage } from "./pages/jobs-page";
+import { ModelsPage } from "./pages/models-page";
+import { NewJobPage } from "./pages/new-job-page";
 
 export type { CurrentUser };
 
@@ -23,54 +34,47 @@ export interface RecentJob {
 }
 
 interface NavigationItem {
-  key: string;
+  to: string;
   labelKey: MessageKey;
   icon: ReactNode;
 }
 
 // There is no team or system administration entry: every account has the same abilities.
 export const NAVIGATION: NavigationItem[] = [
-  { key: "new-job", labelKey: "nav.newJob", icon: <PlusCircle size={16} aria-hidden /> },
-  { key: "jobs", labelKey: "nav.jobs", icon: <ListChecks size={16} aria-hidden /> },
-  { key: "comparison", labelKey: "nav.comparison", icon: <GitCompare size={16} aria-hidden /> },
-  { key: "models", labelKey: "nav.models", icon: <BarChart3 size={16} aria-hidden /> },
-  { key: "datasets", labelKey: "nav.datasets", icon: <Database size={16} aria-hidden /> },
+  { to: "/jobs/new", labelKey: "nav.newJob", icon: <PlusCircle size={16} aria-hidden /> },
+  { to: "/jobs", labelKey: "nav.jobs", icon: <ListChecks size={16} aria-hidden /> },
+  { to: "/comparison", labelKey: "nav.comparison", icon: <GitCompare size={16} aria-hidden /> },
+  { to: "/models", labelKey: "nav.models", icon: <BarChart3 size={16} aria-hidden /> },
+  { to: "/datasets", labelKey: "nav.datasets", icon: <Database size={16} aria-hidden /> },
 ];
 
 export interface AppProps {
   /** Omit to resolve the session from /api/me; pass a value (or null) to skip that request. */
   initialUser?: CurrentUser | null;
   recentJobs?: RecentJob[];
-  activeKey?: string;
-  children?: ReactNode;
+  /** Set in tests to render one route directly; the browser uses real history. */
+  initialPath?: string;
 }
 
-export function App({ initialUser, recentJobs = [], activeKey = "new-job", children }: AppProps) {
-  return (
+export function App({ initialUser, recentJobs = [], initialPath }: AppProps) {
+  const content = (
     <I18nProvider>
       <AuthProvider initialUser={initialUser}>
-        <AppContent recentJobs={recentJobs} activeKey={activeKey}>
-          {children}
-        </AppContent>
+        <AppContent recentJobs={recentJobs} />
       </AuthProvider>
     </I18nProvider>
   );
+
+  return initialPath === undefined ? (
+    <BrowserRouter>{content}</BrowserRouter>
+  ) : (
+    <MemoryRouter initialEntries={[initialPath]}>{content}</MemoryRouter>
+  );
 }
 
-function AppContent({
-  recentJobs,
-  activeKey,
-  children,
-}: {
-  recentJobs: RecentJob[];
-  activeKey: string;
-  children?: ReactNode;
-}) {
+function AppContent({ recentJobs }: { recentJobs: RecentJob[] }) {
   const { t } = useI18n();
   const { user, loading } = useAuth();
-  const [active, setActive] = useState(activeKey);
-
-  useEffect(() => setActive(activeKey), [activeKey]);
 
   if (loading) {
     return <main className="workspace">{t("common.loading")}</main>;
@@ -78,58 +82,23 @@ function AppContent({
   if (user === null) {
     return <AuthPage />;
   }
-  return (
-    <Shell user={user} recentJobs={recentJobs} active={active} onNavigate={setActive}>
-      {children}
-    </Shell>
-  );
+  return <Shell user={user} recentJobs={recentJobs} />;
 }
 
-function Shell({
-  user,
-  recentJobs,
-  active,
-  onNavigate,
-  children,
-}: {
-  user: CurrentUser;
-  recentJobs: RecentJob[];
-  active: string;
-  onNavigate: (key: string) => void;
-  children?: ReactNode;
-}) {
+function Shell({ user, recentJobs }: { user: CurrentUser; recentJobs: RecentJob[] }) {
   const { t, toggleLocale } = useI18n();
-  const { logout, reportFailure } = useAuth();
-
-  async function handleNavigate(key: string) {
-    onNavigate(key);
-    if (key !== "jobs") {
-      return;
-    }
-    try {
-      // Any 401 here means the cookie expired; the session must not look alive.
-      await api.get("/api/jobs");
-    } catch (failure) {
-      reportFailure(failure);
-    }
-  }
+  const { logout } = useAuth();
 
   return (
     <div className="app-shell">
-      <nav className="sidebar" aria-label="AISBench">
+      <nav className="sidebar" aria-label={t("app.name")}>
         <div className="sidebar-brand">{t("app.name")}</div>
         <div className="sidebar-nav">
           {NAVIGATION.map((item) => (
-            <button
-              key={item.key}
-              type="button"
-              className="sidebar-link"
-              aria-current={item.key === active ? "page" : undefined}
-              onClick={() => void handleNavigate(item.key)}
-            >
+            <NavLink key={item.to} to={item.to} className="sidebar-link" end>
               {item.icon}
               <span>{t(item.labelKey)}</span>
-            </button>
+            </NavLink>
           ))}
         </div>
         {recentJobs.length > 0 && (
@@ -137,9 +106,9 @@ function Shell({
             <div className="sidebar-section-title">{t("nav.recent")}</div>
             <div className="sidebar-recent">
               {recentJobs.map((job) => (
-                <a key={job.id} className="sidebar-recent-item" href={`#/jobs/${job.id}`}>
+                <NavLink key={job.id} className="sidebar-recent-item" to={`/jobs/${job.id}`}>
                   {job.title}
-                </a>
+                </NavLink>
               ))}
             </div>
           </div>
@@ -156,7 +125,18 @@ function Shell({
           </div>
         </div>
       </nav>
-      <main className="workspace">{children}</main>
+      <main className="workspace">
+        <Routes>
+          <Route path="/" element={<Navigate to="/jobs/new" replace />} />
+          <Route path="/jobs/new" element={<NewJobPage />} />
+          <Route path="/jobs" element={<JobsPage />} />
+          <Route path="/jobs/:jobId" element={<JobsPage />} />
+          <Route path="/comparison" element={<ComparisonPage />} />
+          <Route path="/models" element={<ModelsPage />} />
+          <Route path="/datasets" element={<DatasetsPage />} />
+          <Route path="*" element={<Navigate to="/jobs/new" replace />} />
+        </Routes>
+      </main>
     </div>
   );
 }

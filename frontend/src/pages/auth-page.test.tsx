@@ -25,7 +25,7 @@ describe("authentication", () => {
     await user.type(screen.getByLabelText("密码"), "password1");
     await user.click(screen.getByRole("button", { name: "创建账号" }));
 
-    expect(await screen.findByText("新建评测")).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "新建评测" })).toBeInTheDocument();
   });
 
   it("signs in an existing account", async () => {
@@ -37,7 +37,7 @@ describe("authentication", () => {
     await user.type(screen.getByLabelText("密码"), "password1");
     await user.click(screen.getByRole("button", { name: "登录" }));
 
-    expect(await screen.findByText("我的任务")).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "我的任务" })).toBeInTheDocument();
   });
 
   it("shows the server's reason inline instead of a generic failure", async () => {
@@ -55,14 +55,14 @@ describe("authentication", () => {
     await user.click(screen.getByRole("button", { name: "创建账号" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("username already exists");
-    expect(screen.queryByText("新建评测")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "新建评测" })).not.toBeInTheDocument();
   });
 
   it("restores a session from /api/me without asking again", async () => {
     server.use(http.get("/api/me", () => HttpResponse.json(ALICE)));
     render(<App />);
 
-    expect(await screen.findByText("新建评测")).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "新建评测" })).toBeInTheDocument();
     expect(screen.queryByLabelText("密码")).not.toBeInTheDocument();
   });
 
@@ -89,7 +89,7 @@ describe("authentication", () => {
     );
     render(<App />);
 
-    await user.click(await screen.findByRole("button", { name: "我的任务" }));
+    await user.click(await screen.findByRole("link", { name: "我的任务" }));
 
     await waitFor(() => expect(screen.getByLabelText("密码")).toBeInTheDocument());
   });
@@ -103,11 +103,11 @@ describe("language", () => {
     server.use(http.get("/api/me", () => HttpResponse.json(ALICE)));
     render(<App />);
 
-    expect(await screen.findByText("新建评测")).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "新建评测" })).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "English" }));
 
-    expect(screen.getByText("New Evaluation")).toBeInTheDocument();
-    expect(screen.queryByText("新建评测")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "New Evaluation" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "新建评测" })).not.toBeInTheDocument();
   });
 
   it("remembers the chosen language across reloads", async () => {
@@ -119,6 +119,6 @@ describe("language", () => {
     first.unmount();
     render(<App />);
 
-    expect(await screen.findByText("New Evaluation")).toBeInTheDocument();
+    expect(await screen.findByRole("link", { name: "New Evaluation" })).toBeInTheDocument();
   });
 });
