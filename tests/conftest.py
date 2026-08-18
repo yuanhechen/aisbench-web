@@ -50,10 +50,44 @@ with read_base():
 """
 
 
+MODEL_CONFIG = """\
+from ais_bench.benchmark.models import {cls}
+
+models = [
+    dict(
+        attr="{attr}",
+        type={cls},
+        abbr="{abbr}",
+        stream={stream},
+        max_out_len=512,
+        batch_size=1,
+    )
+]
+"""
+
+# Two API model classes and one offline config, which must never be offered as an endpoint.
+FAKE_MODEL_CONFIGS = {
+    "vllm_api": [
+        ("vllm_api_general_chat", "VLLMCustomAPIChat", "service", "False"),
+        ("vllm_api_stream_chat", "VLLMCustomAPIChat", "service", "True"),
+    ],
+    "vllm_offline_models": [("vllm_qwen", "VLLM", "offline", "False")],
+}
+
+
 @pytest.fixture
 def aisbench_configs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Write a small AISBench config tree and point the catalog at it."""
     package = tmp_path / "ais_bench"
+    models_root = package / "benchmark" / "configs" / "models"
+    for family, configs in FAKE_MODEL_CONFIGS.items():
+        directory = models_root / family
+        directory.mkdir(parents=True)
+        for name, cls, attr, stream in configs:
+            (directory / f"{name}.py").write_text(
+                MODEL_CONFIG.format(cls=cls, attr=attr, abbr=name, stream=stream),
+                encoding="utf-8",
+            )
     root = package / "benchmark" / "configs" / "datasets"
     for dataset, (data_path, configs) in FAKE_DATASET_CONFIGS.items():
         directory = root / dataset

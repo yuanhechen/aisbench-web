@@ -9,7 +9,13 @@ from functools import lru_cache
 from importlib import resources
 from pathlib import Path
 
-from aisbench_web.datasets.scan import DatasetConfig, ScannedDataset, scan_dataset_configs
+from aisbench_web.datasets.scan import (
+    DatasetConfig,
+    ModelConfig,
+    ScannedDataset,
+    scan_dataset_configs,
+    scan_model_configs,
+)
 from aisbench_web.db import Database
 from aisbench_web.repositories.datasets import DatasetRepository, DatasetStatus
 from aisbench_web.settings import Settings
@@ -136,12 +142,28 @@ def resolve_datasets_root() -> Path | None:
     return None if package is None else package / "datasets"
 
 
-def load_catalog() -> tuple[CatalogEntry, ...]:
-    """Read the catalog from the installed AISBench, pairing it with verified download sources."""
-    package = resolve_ais_bench_package()
+def _configs_package() -> Path | None:
     override = os.environ.get("AISBENCH_CONFIGS_PACKAGE")
     if override:
-        package = Path(override).expanduser().resolve()
+        return Path(override).expanduser().resolve()
+    return resolve_ais_bench_package()
+
+
+def load_model_configs() -> tuple[ModelConfig, ...]:
+    """Model configs the installed AISBench ships that can drive an HTTP endpoint.
+
+    Offline configs are left out: they load a model from disk, which this service has no way
+    to point at.
+    """
+    package = _configs_package()
+    if package is None:
+        return ()
+    return tuple(config for config in scan_model_configs(package) if config.is_service)
+
+
+def load_catalog() -> tuple[CatalogEntry, ...]:
+    """Read the catalog from the installed AISBench, pairing it with verified download sources."""
+    package = _configs_package()
     if package is None:
         return ()
     return _entries_for(scan_dataset_configs(package))

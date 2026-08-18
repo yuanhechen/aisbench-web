@@ -7,6 +7,7 @@ from cryptography.fernet import Fernet
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, SecretStr, field_validator
 
+from aisbench_web.datasets.catalog import load_model_configs
 from aisbench_web.dependencies import get_current_user
 from aisbench_web.jobs.config_generator import CHAT_ENDPOINT, aisbench_service_url
 from aisbench_web.repositories.models import (
@@ -264,6 +265,33 @@ def _encrypted(cipher: Fernet, api_key: SecretStr | None) -> bytes | None:
 
 def _not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_DETAIL)
+
+
+class ModelConfigResponse(BaseModel):
+    """An AISBench model config that can drive an HTTP endpoint."""
+
+    name: str
+    family: str
+    class_name: str
+    stream: bool
+
+
+@router.get("/configs", response_model=list[ModelConfigResponse])
+def list_model_configs(_user: CurrentUserDependency) -> list[ModelConfigResponse]:
+    """The model classes the installed AISBench ships for API endpoints.
+
+    Which one drives an endpoint is the user's choice, as it is on the command line: they
+    are different model classes, not settings of one.
+    """
+    return [
+        ModelConfigResponse(
+            name=config.name,
+            family=config.family,
+            class_name=config.class_name,
+            stream=config.stream,
+        )
+        for config in load_model_configs()
+    ]
 
 
 class ProbeRequest(BaseModel):

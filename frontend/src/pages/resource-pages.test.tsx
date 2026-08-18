@@ -93,9 +93,15 @@ function renderAt(path: string) {
   return render(<App initialUser={ALICE} initialPath={path} />);
 }
 
+const MODEL_CONFIGS = [
+  { name: "vllm_api_general_chat", family: "vllm_api", class_name: "VLLMCustomAPIChat", stream: false },
+  { name: "vllm_api_stream_chat", family: "vllm_api", class_name: "VLLMCustomAPIChat", stream: true },
+];
+
 beforeEach(() => {
   server.use(
     http.get("/api/models", () => HttpResponse.json([MODEL])),
+    http.get("/api/models/configs", () => HttpResponse.json(MODEL_CONFIGS)),
     http.get("/api/datasets", () => HttpResponse.json([GSM8K, MMLU])),
     http.get("/api/jobs", () => HttpResponse.json([])),
   );
@@ -149,6 +155,43 @@ describe("new evaluation", () => {
 
     await waitFor(() => expect(submitted.mode).toBe("accuracy"));
     expect(submitted.parameters).toMatchObject({ max_num_workers: 4 });
+  });
+
+  it("lets the model class be chosen, as the command line does", async () => {
+    const user = userEvent.setup();
+    let submitted: Record<string, unknown> = {};
+    server.use(
+      http.post("/api/jobs", async ({ request }) => {
+        submitted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ id: "j", status: "queued", queue_position: 1 }, { status: 201 });
+      }),
+    );
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("模型配置"), "vllm_api_stream_chat");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await user.click(screen.getByRole("button", { name: "提交评测" }));
+
+    await waitFor(() => expect(submitted.model_config_name).toBe("vllm_api_stream_chat"));
+  });
+
+  it("leaves the model class to the evaluation type when it is not chosen", async () => {
+    const user = userEvent.setup();
+    let submitted: Record<string, unknown> = {};
+    server.use(
+      http.post("/api/jobs", async ({ request }) => {
+        submitted = (await request.json()) as Record<string, unknown>;
+        return HttpResponse.json({ id: "j", status: "queued", queue_position: 1 }, { status: 201 });
+      }),
+    );
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await user.click(screen.getByRole("button", { name: "提交评测" }));
+
+    await waitFor(() => expect(submitted.model_config_name).toBeNull());
   });
 
   it("offers the config variants AISBench ships for the chosen dataset and mode", async () => {

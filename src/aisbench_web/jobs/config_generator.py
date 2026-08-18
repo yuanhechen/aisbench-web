@@ -125,12 +125,16 @@ def render_config(
     dataset_symbol: str,
     endpoint: EndpointSnapshot,
     parameters: dict,
+    model_import: str | None = None,
     redact_api_key: bool = False,
 ) -> str:
     if mode not in MODEL_IMPORTS:
         raise ValueError(f"unknown job mode: {mode!r}")
     dataset_import = _checked_import(dataset_import, pattern=DOTTED_PATH, label="module")
     dataset_symbol = _checked_import(dataset_symbol, pattern=IDENTIFIER, label="symbol")
+    model_import = _checked_import(
+        model_import or MODEL_IMPORTS[mode], pattern=DOTTED_PATH, label="module"
+    )
 
     service_url = aisbench_service_url(endpoint.base_url)
     parsed = urlsplit(service_url)
@@ -142,7 +146,7 @@ def render_config(
         "",
         "with read_base():",
         f"    from {dataset_import} import {dataset_symbol} as datasets",
-        f"    from {MODEL_IMPORTS[mode]} import models",
+        f"    from {model_import} import models",
         f"    from {SUMMARIZER_IMPORTS[mode]} import summarizer",
         "",
         "models[0].update(",
@@ -183,6 +187,7 @@ def generate_config(
     dataset_symbol: str,
     endpoint: EndpointSnapshot,
     parameters: dict,
+    model_import: str | None = None,
 ) -> str:
     """Write the job config with owner-only permissions and return its source.
 
@@ -195,6 +200,7 @@ def generate_config(
         dataset_symbol=dataset_symbol,
         endpoint=endpoint,
         parameters=parameters,
+        model_import=model_import,
         redact_api_key=False,
     )
     output.parent.mkdir(parents=True, exist_ok=True)

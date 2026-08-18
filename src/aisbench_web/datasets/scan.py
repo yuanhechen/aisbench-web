@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from pathlib import Path
 
 CONFIGS_RELATIVE = Path("benchmark") / "configs" / "datasets"
+MODELS_RELATIVE = Path("benchmark") / "configs" / "models"
 DATASET_CONFIG_ROOT = "ais_bench.benchmark.configs.datasets"
+MODEL_CONFIG_ROOT = "ais_bench.benchmark.configs.models"
 # `path='ais_bench/datasets/gsm8k'` or `path="ais_bench/datasets/ceval/formal_ceval"`
 DATA_PATH = re.compile(r"""path\s*=\s*['"]([^'"]*ais_bench/datasets/[^'"]*)['"]""")
 DATASET_SYMBOL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*_datasets)\s*=", re.MULTILINE)
@@ -147,3 +149,65 @@ def scan_dataset_configs(ais_bench_package: Path) -> tuple[ScannedDataset, ...]:
                 )
             )
     return tuple(datasets)
+
+
+# A model config declares the class that will drive the endpoint and how it will call it.
+MODEL_SYMBOL = re.compile(r"^models\s*=", re.MULTILINE)
+MODEL_ATTR = re.compile(r"""attr\s*=\s*['"]([^'"]+)['"]""")
+MODEL_TYPE = re.compile(r"type\s*=\s*([A-Za-z_][A-Za-z0-9_]*)")
+MODEL_ABBR = re.compile(r"""abbr\s*=\s*['"]([^'"]+)['"]""")
+MODEL_STREAM = re.compile(r"stream\s*=\s*(True|False)")
+# Only a service config drives an HTTP endpoint; the rest need a model file on disk.
+SERVICE_ATTR = "service"
+
+
+@dataclass(frozen=True)
+class ModelConfig:
+    """One AISBench model config file: which class drives the endpoint, and how."""
+
+    name: str
+    family: str
+    class_name: str
+    abbr: str
+    stream: bool
+    is_service: bool
+
+    @property
+    def import_path(self) -> str:
+        return f"{MODEL_CONFIG_ROOT}.{self.family}.{self.name}"
+
+
+def scan_model_configs(ais_bench_package: Path) -> tuple[ModelConfig, ...]:
+    """List the model configs the installed AISBench ships for API endpoints."""
+    root = ais_bench_package / MODELS_RELATIVE
+    if not root.is_dir():
+        return ()
+
+    found: list[ModelConfig] = []
+    for family_dir in sorted(root.iterdir()):
+        if not family_dir.is_dir() or family_dir.name.startswith((".", "_")):
+            continue
+        for config_file in sorted(family_dir.glob("*.py")):
+            if config_file.name.startswith("_"):
+                continue
+            try:
+                source = config_file.read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                continue
+            if MODEL_SYMBOL.search(source) is None:
+                continue
+            attr = MODEL_ATTR.search(source)
+            model_type = MODEL_TYPE.search(source)
+            abbr = MODEL_ABBR.search(source)
+            stream = MODEL_STREAM.search(source)
+            found.append(
+                ModelConfig(
+                    name=config_file.stem,
+                    family=family_dir.name,
+                    class_name="" if model_type is None else model_type.group(1),
+                    abbr="" if abbr is None else abbr.group(1),
+                    stream=stream is not None and stream.group(1) == "True",
+                    is_service=attr is not None and attr.group(1) == SERVICE_ATTR,
+                )
+            )
+    return tuple(found)

@@ -58,3 +58,10 @@ export interface Job {
   started_at: string | null;
   finished_at: string | null;
 }
+
+export interface ModelConfigOption {
+  name: string;
+  family: string;
+  class_name: string;
+  stream: boolean;
+}

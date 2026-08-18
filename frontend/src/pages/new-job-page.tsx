@@ -3,7 +3,13 @@ import { useNavigate } from "react-router-dom";
 import type { FormEvent } from "react";
 
 import { api } from "../api/client";
-import type { Dataset, DatasetConfig, Job, ModelEndpoint } from "../api/types";
+import type {
+  Dataset,
+  DatasetConfig,
+  Job,
+  ModelConfigOption,
+  ModelEndpoint,
+} from "../api/types";
 import { useApiQuery } from "../api/use-query";
 import { useAuth } from "../auth/auth-context";
 import { useI18n } from "../i18n/i18n-context";
@@ -14,6 +20,7 @@ type Mode = "accuracy" | "performance";
 interface FormState {
   name: string;
   modelEndpointId: string;
+  modelConfigName: string;
   datasetId: string;
   configName: string;
   mode: Mode;
@@ -45,6 +52,7 @@ interface FormState {
 const INITIAL: FormState = {
   name: "",
   modelEndpointId: "",
+  modelConfigName: "",
   datasetId: "",
   configName: "",
   mode: "accuracy",
@@ -81,6 +89,9 @@ export function NewJobPage() {
   const { reportFailure } = useAuth();
   const models = useApiQuery<ModelEndpoint[]>("/api/models", { onFailure: reportFailure });
   const datasets = useApiQuery<Dataset[]>("/api/datasets", { onFailure: reportFailure });
+  const modelConfigs = useApiQuery<ModelConfigOption[]>("/api/models/configs", {
+    onFailure: reportFailure,
+  });
   const [form, setForm] = useState<FormState>(INITIAL);
   const [queued, setQueued] = useState<Job | null>(null);
   const navigate = useNavigate();
@@ -166,6 +177,7 @@ export function NewJobPage() {
         dataset_id: form.datasetId,
         mode: form.mode,
         config_name: selectedConfig?.name ?? null,
+        model_config_name: form.modelConfigName === "" ? null : form.modelConfigName,
         parameters: parameters(),
       });
       setQueued(created);
@@ -213,6 +225,31 @@ export function NewJobPage() {
             </option>
           ))}
         </select>
+
+        {(modelConfigs.data ?? []).length > 0 && (
+          <>
+            <label className="field" htmlFor="job-model-config">
+              {t("newJob.modelConfig")}
+            </label>
+            <select
+              id="job-model-config"
+              className="input"
+              value={form.modelConfigName}
+              onChange={(event) => update("modelConfigName", event.target.value)}
+            >
+              <option value="">{t("newJob.modelConfigDefault")}</option>
+              {(modelConfigs.data ?? []).map((config) => (
+                <option key={config.name} value={config.name}>
+                  {config.name}
+                  {"\u2003"}
+                  {config.class_name}
+                  {config.stream ? " · stream" : ""}
+                </option>
+              ))}
+            </select>
+            <p className="field-hint">{t("newJob.modelConfigHint")}</p>
+          </>
+        )}
       </section>
 
       <section className="form-step">

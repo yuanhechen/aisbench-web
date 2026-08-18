@@ -492,3 +492,26 @@ async def test_unknown_endpoint_is_not_distinguishable_from_another_owners(
 
     assert missing.status_code == 404
     assert missing.json()["detail"] == "model endpoint not found"
+
+
+@pytest.mark.asyncio
+async def test_model_configs_list_only_what_can_drive_an_endpoint(
+    client: httpx.AsyncClient,
+) -> None:
+    """Which model class runs an endpoint is the user's choice, as it is on the command line."""
+    response = await client.get("/api/models/configs")
+
+    assert response.status_code == 200
+    by_name = {config["name"]: config for config in response.json()}
+    assert set(by_name) == {"vllm_api_general_chat", "vllm_api_stream_chat"}
+    assert by_name["vllm_api_stream_chat"]["stream"] is True
+    assert by_name["vllm_api_general_chat"]["class_name"] == "VLLMCustomAPIChat"
+    # An offline config loads a model from disk; nothing here can point it at one.
+    assert "vllm_qwen" not in by_name
+
+
+@pytest.mark.asyncio
+async def test_model_configs_require_authentication(
+    anonymous_client: httpx.AsyncClient,
+) -> None:
+    assert (await anonymous_client.get("/api/models/configs")).status_code == 401

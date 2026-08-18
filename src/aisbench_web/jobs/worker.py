@@ -148,6 +148,7 @@ class Worker:
                 dataset_symbol=dataset_symbol,
                 endpoint=endpoint,
                 parameters=job.parameters,
+                model_import=job.model_snapshot.get("config_import") or None,
             )
             process = self.runner.launch(
                 ais_bench_path=self.settings.ais_bench_path,
@@ -293,6 +294,7 @@ class Worker:
                 dataset_symbol=dataset_symbol,
                 endpoint=self._endpoint_snapshot(job),
                 parameters=job.parameters,
+                model_import=job.model_snapshot.get("config_import") or None,
                 redact_api_key=True,
             )
         except Exception:

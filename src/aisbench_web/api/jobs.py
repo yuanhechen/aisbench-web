@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket
 from fastapi.websockets import WebSocketDisconnect
 from pydantic import BaseModel, Field, ValidationError
 
-from aisbench_web.datasets.catalog import CatalogEntry, load_catalog
+from aisbench_web.datasets.catalog import CatalogEntry, load_catalog, load_model_configs
 from aisbench_web.dependencies import get_current_user, get_user_repository
 from aisbench_web.jobs.states import TERMINAL_STATUSES
 from aisbench_web.repositories.datasets import DatasetRepository, DatasetStatus
@@ -71,6 +71,8 @@ class JobCreate(BaseModel):
     mode: Literal["accuracy", "performance"]
     #: A specific AISBench config for this dataset; the first one for the mode when omitted.
     config_name: str | None = None
+    #: Which AISBench model config drives the endpoint; the mode's default when omitted.
+    model_config_name: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -78,6 +80,7 @@ class ModelDisplay(BaseModel):
     name: str
     model_name: str
     base_url: str
+    config_name: str = ""
 
 
 class DatasetDisplay(BaseModel):
@@ -151,6 +154,7 @@ def _to_response(job: Job, repository: JobRepository) -> JobResponse:
             name=model.get("name", ""),
             model_name=model.get("model_name", ""),
             base_url=model.get("base_url", ""),
+            config_name=model.get("config_name", ""),
         ),
         dataset=DatasetDisplay(
             id=dataset.get("id", ""),
@@ -225,6 +229,25 @@ def create_job(
             detail=f"configuration {config.name!r} is a {config.mode} configuration",
         )
 
+    model_config = None
+    if payload.model_config_name is not None:
+        model_config = next(
+            (
+                candidate
+                for candidate in load_model_configs()
+                if candidate.name == payload.model_config_name
+            ),
+            None,
+        )
+        if model_config is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"the installed AISBench has no model config named "
+                    f"{payload.model_config_name!r}"
+                ),
+            )
+
     encrypted = endpoints.get_encrypted_api_key_for_owner(user.id, endpoint.id)
     job = repository.create(
         owner_id=user.id,
@@ -240,6 +263,8 @@ def create_job(
             "base_url": endpoint.base_url,
             "model_name": endpoint.model_name,
             "max_output_length": parameters.get("max_output_length") or DEFAULT_MAX_OUTPUT_LENGTH,
+            "config_name": "" if model_config is None else model_config.name,
+            "config_import": "" if model_config is None else model_config.import_path,
             "encrypted_api_key": None if encrypted is None else encrypted.decode("utf-8"),
         },
         dataset_snapshot={

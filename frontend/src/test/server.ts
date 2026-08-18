@@ -5,6 +5,7 @@ import { setupServer } from "msw/node";
 export const server = setupServer(
   http.get("/api/me", () => HttpResponse.json({ detail: "not authenticated" }, { status: 401 })),
   http.get("/api/models", () => HttpResponse.json([])),
+  http.get("/api/models/configs", () => HttpResponse.json([])),
   http.get("/api/datasets", () => HttpResponse.json([])),
   http.get("/api/jobs", () => HttpResponse.json([])),
 );
