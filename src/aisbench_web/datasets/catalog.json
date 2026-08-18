@@ -1,0 +1,37 @@
+{
+  "datasets": [
+    {
+      "id": "gsm8k",
+      "name": "GSM8K",
+      "description": "Grade-school math word problems for step-by-step reasoning accuracy.",
+      "accuracy_config": "gsm8k_gen_4_shot_cot_chat_prompt",
+      "performance_config": "gsm8k_gen_0_shot_cot_str_perf",
+      "relative_data_path": "gsm8k",
+      "download_url": "https://opencompass.oss-cn-shanghai.aliyuncs.com/datasets/data/gsm8k.zip",
+      "sha256": null,
+      "size_bytes": null
+    },
+    {
+      "id": "ceval",
+      "name": "C-Eval",
+      "description": "Chinese multi-discipline multiple-choice exam benchmark.",
+      "accuracy_config": "ceval_gen_0_shot_cot_chat_prompt",
+      "performance_config": "ceval_gen_0_shot_str_perf",
+      "relative_data_path": "ceval/formal_ceval",
+      "download_url": null,
+      "sha256": null,
+      "size_bytes": null
+    },
+    {
+      "id": "mmlu",
+      "name": "MMLU",
+      "description": "English multi-subject multiple-choice knowledge benchmark.",
+      "accuracy_config": "mmlu_gen_5_shot_chat_prompt",
+      "performance_config": null,
+      "relative_data_path": "mmlu",
+      "download_url": null,
+      "sha256": null,
+      "size_bytes": null
+    }
+  ]
+}

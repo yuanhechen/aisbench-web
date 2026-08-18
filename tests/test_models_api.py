@@ -1,11 +1,11 @@
 import httpx
 import pytest
-from conftest import ClientFactory
 from fastapi import FastAPI
 
 from aisbench_web.db import Database
 from aisbench_web.security import api_key_cipher, load_or_create_secret
 from aisbench_web.settings import Settings
+from conftest import ClientFactory
 
 ENDPOINT_PAYLOAD = {
     "name": "qwen",

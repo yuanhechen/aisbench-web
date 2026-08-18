@@ -1,3 +1,4 @@
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from ipaddress import AddressValueError, IPv4Address, IPv6Address
 from urllib.parse import urlsplit
@@ -8,7 +9,9 @@ from fastapi.exceptions import RequestValidationError
 from starlette.responses import JSONResponse
 
 from aisbench_web.api.auth import router as auth_router
+from aisbench_web.api.datasets import router as datasets_router
 from aisbench_web.api.models import router as models_router
+from aisbench_web.datasets.catalog import CatalogService
 from aisbench_web.db import Database
 from aisbench_web.settings import Settings
 
@@ -146,12 +149,23 @@ def create_app(
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         database.migrate()
-        yield
+        CatalogService(database, settings).sync()
+        # One shared slot: concurrent downloads of the same catalog would race for disk and
+        # bandwidth, and the dataset lock already serializes per dataset.
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="dataset-install")
+        app.state.install_executor = executor
+        app.state.install_tasks = []
+        try:
+            yield
+        finally:
+            executor.shutdown(wait=True)
 
     app = FastAPI(lifespan=lifespan)
     app.state.settings = settings
     app.state.start_worker = start_worker
     app.state.database = database
+    app.state.install_executor = None
+    app.state.install_tasks: list[Future] = []
 
     @app.exception_handler(RequestValidationError)
     async def validation_error_without_raw_inputs(
@@ -192,5 +206,6 @@ def create_app(
 
     app.include_router(auth_router)
     app.include_router(models_router)
+    app.include_router(datasets_router)
 
     return app
