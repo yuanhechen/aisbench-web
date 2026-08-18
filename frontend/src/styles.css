@@ -1,0 +1,144 @@
+/* Codex-style two-surface layout: a fixed neutral sidebar and a white work area.
+   No gradients, no KPI cards, no decorative shadows; blue marks active state only. */
+:root {
+  --text: #191c1f;
+  --text-secondary: #686b6e;
+  --text-tertiary: #8e8f90;
+  --sidebar: #e0dfe1;
+  --selected: #d4d5d6;
+  --line: #ededed;
+  --canvas: #ffffff;
+  --accent: #349cff;
+  --danger: #b44f4a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--canvas);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 244px 1fr;
+  height: 100%;
+}
+
+.sidebar {
+  background: var(--sidebar);
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  overflow-y: auto;
+  padding: 20px 12px;
+}
+
+.sidebar-brand {
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  padding: 0 8px;
+}
+
+.sidebar-nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-link {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 8px;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: 10px;
+  padding: 7px 8px;
+  text-align: left;
+  text-decoration: none;
+  width: 100%;
+}
+
+.sidebar-link:hover {
+  background: var(--selected);
+}
+
+.sidebar-link[aria-current="page"] {
+  background: var(--selected);
+  font-weight: 500;
+}
+
+.sidebar-section-title {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  padding: 0 8px 6px;
+}
+
+.sidebar-recent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-recent-item {
+  border-radius: 8px;
+  color: var(--text-secondary);
+  overflow: hidden;
+  padding: 5px 8px;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-recent-item:hover {
+  background: var(--selected);
+  color: var(--text);
+}
+
+.sidebar-footer {
+  border-top: 1px solid var(--selected);
+  color: var(--text-secondary);
+  margin-top: auto;
+  padding: 12px 8px 0;
+}
+
+.workspace {
+  background: var(--canvas);
+  overflow-y: auto;
+  padding: 32px 40px;
+}
+
+.workspace-header {
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 24px;
+  padding-bottom: 16px;
+}
+
+.workspace-title {
+  font-size: 20px;
+  font-weight: 600;
+  margin: 0;
+}
+
+.workspace-subtitle {
+  color: var(--text-secondary);
+  margin: 4px 0 0;
+}
