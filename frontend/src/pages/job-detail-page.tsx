@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import type { Job } from "../api/types";
 import { useAuth } from "../auth/auth-context";
+import { JobResults } from "../components/job-results";
 import { ACTIVE_STATUSES, StatusLabel } from "../components/status";
 import { useI18n } from "../i18n/i18n-context";
 
@@ -156,6 +157,8 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
           </p>
         )}
       </section>
+
+      {job.status === "succeeded" && <JobResults jobId={jobId} />}
 
       <section className="task-block">
         <h2 className="form-step-title">{t("jobDetail.log")}</h2>

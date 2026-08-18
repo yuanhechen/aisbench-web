@@ -573,3 +573,44 @@ select.input {
   font: inherit;
   padding: 6px 10px;
 }
+
+.checkbox-list {
+  display: flex;
+  flex-direction: column;
+  margin-bottom: 12px;
+}
+
+.comparison-warning {
+  color: var(--text-secondary);
+  margin: 0 0 10px;
+}
+
+.metric-bar {
+  background: var(--selected);
+  border-radius: 8px;
+  display: block;
+  height: 4px;
+  margin-top: 4px;
+  min-width: 2px;
+}
+
+.artifact-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.artifact-list li {
+  padding: 3px 0;
+}
+
+.artifact-list a {
+  color: var(--text);
+}
+
+.visualization-frame {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  height: 420px;
+  width: 100%;
+}

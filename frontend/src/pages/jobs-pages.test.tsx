@@ -139,6 +139,73 @@ describe("job detail", () => {
     fake.restore();
   });
 
+  it("shows results, hides extra metrics until asked, and links artifacts by id", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/jobs/job-1", () =>
+        HttpResponse.json({ ...JOB, status: "succeeded", progress: { completed: 8, total: 8 } }),
+      ),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () =>
+        HttpResponse.json([
+          { key: "gsm8k.accuracy", value: 82.5, text_value: null, unit: null },
+          { key: "extra.SomeFutureMetric", value: 7, text_value: null, unit: null },
+        ]),
+      ),
+      http.get("/api/jobs/job-1/artifacts", () =>
+        HttpResponse.json([
+          {
+            id: "artifact-1",
+            kind: "summary",
+            relative_path: "summary/summary_1.csv",
+            content_type: "text/csv",
+          },
+        ]),
+      ),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    expect(await screen.findByText("gsm8k.accuracy")).toBeInTheDocument();
+    expect(screen.queryByText("SomeFutureMetric")).not.toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "展开其他指标" }));
+    expect(screen.getByText("SomeFutureMetric")).toBeInTheDocument();
+
+    expect(screen.getByRole("link", { name: "summary/summary_1.csv" })).toHaveAttribute(
+      "href",
+      "/api/jobs/job-1/artifacts/artifact-1",
+    );
+    fake.restore();
+  });
+
+  it("sandboxes an embedded visualization away from this origin", async () => {
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () =>
+        HttpResponse.json([
+          {
+            id: "viz-1",
+            kind: "visualization",
+            relative_path: "report.html",
+            content_type: "text/html",
+          },
+        ]),
+      ),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    const frame = await screen.findByTitle("report.html");
+    const sandbox = frame.getAttribute("sandbox") ?? "";
+    expect(sandbox).toContain("allow-scripts");
+    // allow-same-origin would hand the embedded page this origin's cookies and DOM.
+    expect(sandbox).not.toContain("allow-same-origin");
+    fake.restore();
+  });
+
   it("shows the failure reason a failed job carries", async () => {
     server.use(
       http.get("/api/jobs/job-1", () =>
