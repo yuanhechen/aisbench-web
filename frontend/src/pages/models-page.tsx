@@ -10,8 +10,8 @@ import { PageHeader } from "../components/page-header";
 
 interface Draft {
   name: string;
-  base_url: string;
-  model_name: string;
+  host: string;
+  port: string;
   api_key: string;
   request_timeout: string;
   max_output_length: string;
@@ -19,8 +19,8 @@ interface Draft {
 
 const EMPTY_DRAFT: Draft = {
   name: "",
-  base_url: "",
-  model_name: "",
+  host: "",
+  port: "8000",
   api_key: "",
   request_timeout: "60",
   max_output_length: "512",
@@ -40,6 +40,8 @@ export function ModelsPage() {
     try {
       const result = await api.post<ProbeResult>(`/api/models/${endpoint.id}/test`);
       setProbes((current) => ({ ...current, [endpoint.id]: result }));
+      // Testing is also how a renamed or replaced model is picked up.
+      endpoints.reload();
     } catch (failure) {
       reportFailure(failure);
       setError(failure instanceof Error ? failure.message : String(failure));
@@ -88,8 +90,13 @@ export function ModelsPage() {
                 {!endpoint.is_active && <span className="tag">{t("models.inactive")}</span>}
               </div>
               <div className="resource-meta">
-                <span>{endpoint.model_name}</span>
-                <span>{endpoint.base_url}</span>
+                <span>{`${endpoint.host}:${endpoint.port}`}</span>
+                {/* Detected from the service, never typed in. */}
+                <span>
+                  {endpoint.model_name === ""
+                    ? t("models.modelUnknown")
+                    : endpoint.model_name}
+                </span>
                 {/* The stored key is never returned by the API, so only its presence is shown. */}
                 <span>{endpoint.has_api_key ? t("models.keySaved") : t("models.keyNone")}</span>
               </div>
@@ -146,6 +153,7 @@ function CreateEndpointDialog({
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [useHttps, setUseHttps] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -160,8 +168,9 @@ function CreateEndpointDialog({
     try {
       await api.post("/api/models", {
         name: draft.name,
-        base_url: draft.base_url,
-        model_name: draft.model_name,
+        host: draft.host,
+        port: Number(draft.port),
+        use_https: useHttps,
         // An empty box means "no key", not an empty key.
         api_key: draft.api_key === "" ? null : draft.api_key,
         request_timeout: Number(draft.request_timeout),
@@ -181,10 +190,10 @@ function CreateEndpointDialog({
         <h2 className="modal-title">{t("models.create")}</h2>
         {(
           [
-            ["name", t("models.name"), "text"],
-            ["base_url", "Base URL", "text"],
-            ["model_name", t("models.modelName"), "text"],
+            ["host", t("models.host"), "text"],
+            ["port", t("models.port"), "number"],
             ["api_key", "API Key", "password"],
+            ["name", t("models.name"), "text"],
             ["request_timeout", t("models.timeout"), "number"],
             ["max_output_length", t("models.maxOutput"), "number"],
           ] as const
@@ -202,6 +211,15 @@ function CreateEndpointDialog({
             />
           </div>
         ))}
+        <label className="checkbox-option">
+          <input
+            type="checkbox"
+            checked={useHttps}
+            onChange={(event) => setUseHttps(event.target.checked)}
+          />
+          <span>{t("models.useHttps")}</span>
+        </label>
+        <p className="field-hint">{t("models.detectHint")}</p>
         {error !== null && (
           <p className="form-error" role="alert">
             {error}

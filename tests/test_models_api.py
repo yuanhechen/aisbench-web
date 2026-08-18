@@ -9,15 +9,19 @@ from conftest import ClientFactory
 
 ENDPOINT_PAYLOAD = {
     "name": "qwen",
-    "base_url": "http://127.0.0.1:8001/v1",
-    "model_name": "Qwen3-32B",
+    "host": "127.0.0.1",
+    "port": 8001,
     "api_key": "secret-token",
     "request_timeout": 60,
     "max_output_length": 512,
 }
+MODEL_LISTING = {"data": [{"id": "Qwen3-32B"}, {"id": "another-model"}]}
 RESPONSE_FIELDS = {
     "id",
     "name",
+    "host",
+    "port",
+    "use_https",
     "base_url",
     "model_name",
     "has_api_key",
@@ -25,6 +29,13 @@ RESPONSE_FIELDS = {
     "max_output_length",
     "is_active",
 }
+
+
+def serve_model_listing(api_app: FastAPI) -> list[httpx.Request]:
+    """Answer the model listing the way an OpenAI-compatible service does."""
+    return install_probe_transport(
+        api_app, lambda _request: httpx.Response(200, json=MODEL_LISTING)
+    )
 
 
 def install_probe_transport(api_app: FastAPI, handler) -> list[httpx.Request]:
@@ -37,6 +48,11 @@ def install_probe_transport(api_app: FastAPI, handler) -> list[httpx.Request]:
 
     api_app.state.http_transport = httpx.MockTransport(record)
     return seen
+
+
+@pytest.fixture(autouse=True)
+def default_model_listing(api_app: FastAPI) -> None:
+    serve_model_listing(api_app)
 
 
 @pytest.mark.asyncio
@@ -90,6 +106,10 @@ async def test_response_exposes_exactly_the_agreed_fields(client: httpx.AsyncCli
     assert listed.json()[0].keys() == RESPONSE_FIELDS
     assert fetched.json() == created.json()
     assert created.json()["is_active"] is True
+    assert created.json()["host"] == "127.0.0.1"
+    assert created.json()["port"] == 8001
+    assert created.json()["use_https"] is False
+    # Derived, not asked for: the user gave a host and a port.
     assert created.json()["base_url"] == "http://127.0.0.1:8001/v1"
 
 
@@ -134,16 +154,17 @@ async def test_names_are_unique_per_owner_only(client_factory: ClientFactory) ->
 @pytest.mark.parametrize(
     "override",
     [
-        {"base_url": "ftp://127.0.0.1:8001/v1"},
-        {"base_url": "http:///v1"},
-        {"base_url": "not-a-url"},
-        {"base_url": ""},
+        {"host": ""},
+        {"host": "   "},
+        {"host": "http://127.0.0.1"},
+        {"host": "127.0.0.1:8001"},
+        {"port": 0},
+        {"port": 70000},
         {"request_timeout": 0},
         {"request_timeout": 601},
         {"max_output_length": 0},
         {"max_output_length": 131073},
-        {"name": "   "},
-        {"model_name": ""},
+        {"name": "x" * 200},
     ],
 )
 async def test_invalid_endpoint_fields_are_rejected(
@@ -154,6 +175,86 @@ async def test_invalid_endpoint_fields_are_rejected(
 
     assert response.status_code == 422
     assert "secret-token" not in response.text
+
+
+@pytest.mark.asyncio
+async def test_model_name_is_detected_from_the_service(client: httpx.AsyncClient) -> None:
+    """The user configures where the service is; what it serves is asked of the service."""
+    created = await client.post("/api/models", json=ENDPOINT_PAYLOAD)
+
+    assert created.status_code == 201
+    assert created.json()["model_name"] == "Qwen3-32B"
+
+
+@pytest.mark.asyncio
+async def test_detection_asks_the_service_with_the_stored_key(
+    api_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    requests = serve_model_listing(api_app)
+
+    await client.post("/api/models", json=ENDPOINT_PAYLOAD)
+
+    assert str(requests[0].url) == "http://127.0.0.1:8001/v1/models"
+    assert requests[0].headers["authorization"] == "Bearer secret-token"
+
+
+@pytest.mark.asyncio
+async def test_an_unreachable_service_still_saves_with_no_model_name(
+    api_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    """A temporarily unreachable endpoint must not block saving (design section 7.1)."""
+
+    def refuse(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    install_probe_transport(api_app, refuse)
+
+    created = await client.post("/api/models", json=ENDPOINT_PAYLOAD)
+
+    assert created.status_code == 201
+    assert created.json()["model_name"] == ""
+
+
+@pytest.mark.asyncio
+async def test_testing_the_connection_refreshes_the_detected_model(
+    api_app: FastAPI,
+    client: httpx.AsyncClient,
+) -> None:
+    created = (await client.post("/api/models", json=ENDPOINT_PAYLOAD)).json()
+    install_probe_transport(
+        api_app,
+        lambda _request: httpx.Response(200, json={"data": [{"id": "Qwen3-Next"}]}),
+    )
+
+    probe = await client.post(f"/api/models/{created['id']}/test")
+
+    assert probe.json()["ok"] is True
+    assert probe.json()["models"] == ["Qwen3-Next"]
+    refreshed = await client.get(f"/api/models/{created['id']}")
+    assert refreshed.json()["model_name"] == "Qwen3-Next"
+
+
+@pytest.mark.asyncio
+async def test_https_endpoints_are_supported(client: httpx.AsyncClient) -> None:
+    created = await client.post(
+        "/api/models", json={**ENDPOINT_PAYLOAD, "host": "api.example.com", "port": 443,
+                             "use_https": True}
+    )
+
+    assert created.json()["base_url"] == "https://api.example.com:443/v1"
+    assert created.json()["use_https"] is True
+
+
+@pytest.mark.asyncio
+async def test_a_blank_name_falls_back_to_the_address(client: httpx.AsyncClient) -> None:
+    payload = {key: value for key, value in ENDPOINT_PAYLOAD.items() if key != "name"}
+
+    created = await client.post("/api/models", json=payload)
+
+    assert created.status_code == 201
+    assert created.json()["name"] == "127.0.0.1:8001"
 
 
 @pytest.mark.asyncio
@@ -205,11 +306,11 @@ async def test_probe_reports_success_without_exposing_the_key(
 
     assert probe.status_code == 200
     assert probe.json()["ok"] is True
-    assert probe.json().keys() == {"ok", "latency_ms", "message"}
+    assert probe.json().keys() == {"ok", "latency_ms", "message", "models"}
     assert probe.json()["latency_ms"] >= 0
     assert "secret-token" not in probe.text
-    assert str(requests[0].url) == "http://127.0.0.1:8001/v1/models"
-    assert requests[0].headers["authorization"] == "Bearer secret-token"
+    assert str(requests[-1].url) == "http://127.0.0.1:8001/v1/models"
+    assert requests[-1].headers["authorization"] == "Bearer secret-token"
 
 
 @pytest.mark.asyncio
@@ -256,7 +357,7 @@ async def test_probe_omits_authorization_when_no_key_is_stored(
 
     await client.post(f"/api/models/{created['id']}/test")
 
-    assert "authorization" not in requests[0].headers
+    assert "authorization" not in requests[-1].headers
 
 
 @pytest.mark.asyncio

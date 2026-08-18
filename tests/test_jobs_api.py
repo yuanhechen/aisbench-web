@@ -16,12 +16,13 @@ from conftest import TEST_PASSWORD, ClientFactory
 
 ENDPOINT_PAYLOAD = {
     "name": "qwen",
-    "base_url": "http://127.0.0.1:8001/v1",
-    "model_name": "Qwen3-32B",
+    "host": "127.0.0.1",
+    "port": 8001,
     "api_key": "secret-token",
     "request_timeout": 60,
     "max_output_length": 512,
 }
+MODEL_LISTING = {"data": [{"id": "Qwen3-32B"}]}
 ACCURACY_JOB = {
     "dataset_id": "gsm8k",
     "mode": "accuracy",
@@ -41,7 +42,12 @@ def datasets_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def api_app(settings: Settings, datasets_root: Path) -> FastAPI:
-    return create_app(settings=settings, start_worker=False)
+    app = create_app(settings=settings, start_worker=False)
+    # Creating an endpoint asks the service which model it serves.
+    app.state.http_transport = httpx.MockTransport(
+        lambda _request: httpx.Response(200, json=MODEL_LISTING)
+    )
+    return app
 
 
 @pytest_asyncio.fixture

@@ -10,6 +10,9 @@ const ALICE = { id: "u1", username: "alice" };
 const MODEL = {
   id: "model-1",
   name: "Qwen3",
+  host: "127.0.0.1",
+  port: 8001,
+  use_https: false,
   base_url: "http://127.0.0.1:8001/v1",
   model_name: "Qwen3-32B",
   has_api_key: true,
@@ -151,11 +154,33 @@ describe("new evaluation", () => {
 });
 
 describe("my models", () => {
+  it("never asks for a model name in the form", async () => {
+    const user = userEvent.setup();
+    renderAt("/models");
+
+    await user.click(await screen.findByRole("button", { name: "新建模型端点" }));
+
+    expect(screen.queryByLabelText("模型名")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Base URL")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("IP 或主机名")).toBeInTheDocument();
+    expect(screen.getByLabelText("端口")).toBeInTheDocument();
+  });
+
+  it("shows a not-yet-detected model instead of an empty gap", async () => {
+    server.use(
+      http.get("/api/models", () => HttpResponse.json([{ ...MODEL, model_name: "" }])),
+    );
+    renderAt("/models");
+
+    expect(await screen.findByText("模型待探测")).toBeInTheDocument();
+  });
+
   it("lists endpoints and never shows the stored key", async () => {
     renderAt("/models");
 
     expect(await screen.findByText("Qwen3")).toBeInTheDocument();
     expect(screen.getByText("Qwen3-32B")).toBeInTheDocument();
+    expect(screen.getByText("127.0.0.1:8001")).toBeInTheDocument();
     expect(screen.getByText("已保存")).toBeInTheDocument();
     expect(document.body.textContent).not.toContain("secret");
   });
@@ -172,14 +197,20 @@ describe("my models", () => {
     renderAt("/models");
 
     await user.click(await screen.findByRole("button", { name: "新建模型端点" }));
-    await user.type(screen.getByLabelText("显示名称"), "new");
-    await user.type(screen.getByLabelText("Base URL"), "http://127.0.0.1:9000/v1");
-    await user.type(screen.getByLabelText("模型名"), "Qwen3-8B");
+    await user.type(screen.getByLabelText("IP 或主机名"), "127.0.0.1");
+    await user.clear(screen.getByLabelText("端口"));
+    await user.type(screen.getByLabelText("端口"), "9000");
     await user.type(screen.getByLabelText("API Key"), "top-secret");
+    await user.type(screen.getByLabelText("显示名称"), "new");
     await user.click(screen.getByRole("button", { name: "保存" }));
 
     await waitFor(() => expect(created.name).toBe("new"));
+    // The address is what the user gives; the model name is never asked for.
+    expect(created.host).toBe("127.0.0.1");
+    expect(created.port).toBe(9000);
     expect(created.api_key).toBe("top-secret");
+    expect(created).not.toHaveProperty("model_name");
+    expect(created).not.toHaveProperty("base_url");
     await waitFor(() =>
       expect(screen.queryByRole("dialog")).not.toBeInTheDocument(),
     );
@@ -190,7 +221,12 @@ describe("my models", () => {
     const user = userEvent.setup();
     server.use(
       http.post("/api/models/model-1/test", () =>
-        HttpResponse.json({ ok: false, latency_ms: 12, message: "connection refused" }),
+        HttpResponse.json({
+          ok: false,
+          latency_ms: 12,
+          message: "connection refused",
+          models: [],
+        }),
       ),
     );
     renderAt("/models");

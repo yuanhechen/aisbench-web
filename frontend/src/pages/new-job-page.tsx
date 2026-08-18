@@ -130,7 +130,7 @@ export function NewJobPage() {
           <option value="">{t("newJob.choose")}</option>
           {activeModels.map((model) => (
             <option key={model.id} value={model.id}>
-              {model.name} · {model.model_name}
+              {model.model_name === "" ? model.name : `${model.name} · ${model.model_name}`}
             </option>
           ))}
         </select>
