@@ -1,13 +1,49 @@
 import sqlite3
 import threading
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import httpx
 import pytest
 
 from aisbench_web.app import create_app
-from aisbench_web.db import Database
+from aisbench_web.db import MIGRATION_1, Database
+from aisbench_web.repositories.users import UserRepository
+from aisbench_web.security import hash_password
 from aisbench_web.settings import Settings
+
+LEGACY_USERS_SQL = """
+CREATE TABLE users (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL COLLATE NOCASE UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+)
+"""
+
+
+def create_legacy_v1_database(database: Database) -> None:
+    with database.connect() as connection:
+        connection.execute(
+            """
+            CREATE TABLE schema_migrations (
+              version INTEGER PRIMARY KEY,
+              applied_at TEXT NOT NULL
+            )
+            """
+        )
+        for statement in MIGRATION_1:
+            if "CREATE TABLE users" in statement:
+                statement = LEGACY_USERS_SQL
+            elif "sessions_expires_at_idx" in statement:
+                continue
+            connection.execute(statement)
+        connection.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (1, "2026-01-01T00:00:00+00:00"),
+        )
 
 
 def test_concurrent_first_time_migrations_retry_locked_wal(tmp_path, monkeypatch):
@@ -58,7 +94,7 @@ def test_concurrent_first_time_migrations_retry_locked_wal(tmp_path, monkeypatch
         versions = connection.execute(
             "SELECT version, COUNT(*) FROM schema_migrations GROUP BY version"
         ).fetchall()
-    assert [tuple(row) for row in versions] == [(1, 1)]
+    assert [tuple(row) for row in versions] == [(1, 1), (2, 1)]
     assert all(connection.was_closed for connection in created_connections)
 
 
@@ -107,6 +143,233 @@ def test_migrate_rejects_a_journal_mode_other_than_wal():
         database.migrate()
 
 
+def test_migration_1_remains_the_exact_legacy_user_and_session_shape(tmp_path):
+    database = Database(tmp_path / "legacy-v1.db")
+
+    with database.connect() as connection:
+        for statement in MIGRATION_1:
+            connection.execute(statement)
+        user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)")}
+        indexes = {
+            row["name"]
+            for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'index'")
+        }
+
+    assert "username_key" not in user_columns
+    assert "sessions_expires_at_idx" not in indexes
+
+
+@pytest.mark.asyncio
+async def test_migration_2_upgrades_legacy_users_and_sessions_atomically(tmp_path):
+    settings = Settings.create(tmp_path, tmp_path / "ais_bench", 1)
+    database = Database(settings.db_path)
+    create_legacy_v1_database(database)
+    password_hash = hash_password("password one")
+    created_at = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    expired_at = created_at - timedelta(days=1)
+    with database.connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO users (id, username, password_hash, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            ("user-1", "Élodie", password_hash, created_at.isoformat()),
+        )
+        connection.execute(
+            """
+            INSERT INTO sessions (id, user_id, token_hash, created_at, expires_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                "expired-session",
+                "user-1",
+                "expired-token-hash",
+                created_at.isoformat(),
+                expired_at.isoformat(),
+            ),
+        )
+
+    database.migrate()
+
+    credentials = UserRepository(database).get_credentials_by_username("éLODIE")
+    assert credentials is not None
+    assert credentials.user.username == "Élodie"
+    with database.connect() as connection:
+        migrated_user = connection.execute(
+            "SELECT username_key FROM users WHERE id = ?", ("user-1",)
+        ).fetchone()
+        preserved_session = connection.execute(
+            "SELECT id FROM sessions WHERE id = ?", ("expired-session",)
+        ).fetchone()
+    assert migrated_user["username_key"] == "élodie"
+    assert preserved_session["id"] == "expired-session"
+
+    app = create_app(settings=settings, start_worker=False)
+    async with app.router.lifespan_context(app):
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(
+            transport=transport,
+            base_url="http://testserver",
+        ) as client:
+            login = await client.post(
+                "/api/auth/login",
+                json={"username": "éLODIE", "password": "password one"},
+            )
+    assert login.status_code == 200
+    assert login.json()["username"] == "Élodie"
+
+    with database.connect() as connection:
+        versions = connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall()
+        sessions = connection.execute("SELECT id FROM sessions ORDER BY id").fetchall()
+        expiry_query_plan = [
+            row["detail"]
+            for row in connection.execute(
+                "EXPLAIN QUERY PLAN DELETE FROM sessions WHERE expires_at <= ?",
+                (datetime.now(timezone.utc).isoformat(),),
+            )
+        ]
+        with pytest.raises(sqlite3.IntegrityError):
+            connection.execute(
+                """
+                INSERT INTO users (
+                  id, username, username_key, password_hash, created_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                ("user-2", "Alias", "élodie", "hash", created_at.isoformat()),
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="username_key must not be null",
+        ):
+            connection.execute(
+                """
+                INSERT INTO users (id, username, password_hash, created_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                ("user-3", "Bob", "hash", created_at.isoformat()),
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="username_key must not be null",
+        ):
+            connection.execute(
+                "UPDATE users SET username_key = NULL WHERE id = ?",
+                ("user-1",),
+            )
+
+    assert [row["version"] for row in versions] == [1, 2]
+    assert [row["id"] for row in sessions] != ["expired-session"]
+    assert any("sessions_expires_at_idx" in detail for detail in expiry_query_plan)
+
+
+def test_migration_2_rolls_back_casefold_collisions(tmp_path):
+    database = Database(tmp_path / "collision.db")
+    create_legacy_v1_database(database)
+    with database.connect() as connection:
+        connection.executemany(
+            """
+            INSERT INTO users (id, username, password_hash, created_at)
+            VALUES (?, ?, ?, ?)
+            """,
+            [
+                ("user-1", "Straße", "hash", "2026-01-01T00:00:00+00:00"),
+                ("user-2", "STRASSE", "hash", "2026-01-01T00:00:00+00:00"),
+            ],
+        )
+
+    with pytest.raises(
+        RuntimeError,
+        match=r"casefold collision.*Straße.*STRASSE",
+    ):
+        database.migrate()
+
+    with database.connect() as connection:
+        user_columns = {row["name"] for row in connection.execute("PRAGMA table_info(users)")}
+        versions = connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall()
+        expiry_index = connection.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'index' AND name = ?",
+            ("sessions_expires_at_idx",),
+        ).fetchone()
+        users = connection.execute("SELECT username FROM users ORDER BY id").fetchall()
+
+    assert "username_key" not in user_columns
+    assert [row["version"] for row in versions] == [1]
+    assert expiry_index is None
+    assert [row["username"] for row in users] == ["Straße", "STRASSE"]
+
+
+def test_migration_2_accepts_transient_hardened_version_1_without_duplicate_indexes(
+    tmp_path,
+):
+    database = Database(tmp_path / "transient.db")
+    with database.connect() as connection:
+        connection.executescript(
+            """
+            CREATE TABLE schema_migrations (
+              version INTEGER PRIMARY KEY,
+              applied_at TEXT NOT NULL
+            );
+            CREATE TABLE users (
+              id TEXT PRIMARY KEY,
+              username TEXT NOT NULL,
+              username_key TEXT NOT NULL UNIQUE,
+              password_hash TEXT NOT NULL,
+              created_at TEXT NOT NULL,
+              last_login_at TEXT
+            );
+            CREATE TABLE sessions (
+              id TEXT PRIMARY KEY,
+              user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+              token_hash TEXT NOT NULL UNIQUE,
+              created_at TEXT NOT NULL,
+              expires_at TEXT NOT NULL
+            );
+            CREATE INDEX sessions_user_id_idx ON sessions(user_id);
+            CREATE INDEX sessions_expires_at_idx ON sessions(expires_at);
+            INSERT INTO schema_migrations VALUES (1, '2026-01-01T00:00:00+00:00');
+            INSERT INTO users VALUES (
+              'user-1', 'Élodie', 'élodie', 'hash', '2026-01-01T00:00:00+00:00', NULL
+            );
+            """
+        )
+
+    database.migrate()
+
+    with database.connect() as connection:
+        versions = connection.execute(
+            "SELECT version FROM schema_migrations ORDER BY version"
+        ).fetchall()
+        username_key_indexes = [
+            index["name"]
+            for index in connection.execute("PRAGMA index_list(users)")
+            if index["unique"]
+            and tuple(
+                row["name"] for row in connection.execute(f"PRAGMA index_info({index['name']})")
+            )
+            == ("username_key",)
+        ]
+
+    assert [row["version"] for row in versions] == [1, 2]
+    assert len(username_key_indexes) == 1
+
+
+def test_migrate_rejects_database_from_a_newer_schema_version(tmp_path):
+    database = Database(tmp_path / "newer.db")
+    database.migrate()
+    with database.connect() as connection:
+        connection.execute(
+            "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+            (3, "2026-01-01T00:00:00+00:00"),
+        )
+
+    with pytest.raises(RuntimeError, match=r"newer schema version 3"):
+        database.migrate()
+
+
 def test_migrate_creates_schema_and_wal(tmp_path):
     database = Database(tmp_path / "app.db")
     database.migrate()
@@ -147,7 +410,7 @@ def test_migrations_are_idempotent_and_record_version_once(tmp_path):
         applied_versions = connection.execute(
             "SELECT version, COUNT(*) FROM schema_migrations GROUP BY version"
         ).fetchall()
-    assert [tuple(row) for row in applied_versions] == [(1, 1)]
+    assert [tuple(row) for row in applied_versions] == [(1, 1), (2, 1)]
 
 
 def test_migration_creates_required_column_shapes(tmp_path):

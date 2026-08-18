@@ -12,8 +12,7 @@ MIGRATION_1 = (
     """
     CREATE TABLE users (
       id TEXT PRIMARY KEY,
-      username TEXT NOT NULL,
-      username_key TEXT NOT NULL UNIQUE,
+      username TEXT NOT NULL COLLATE NOCASE UNIQUE,
       password_hash TEXT NOT NULL,
       created_at TEXT NOT NULL,
       last_login_at TEXT
@@ -29,7 +28,6 @@ MIGRATION_1 = (
     )
     """,
     "CREATE INDEX sessions_user_id_idx ON sessions(user_id)",
-    "CREATE INDEX sessions_expires_at_idx ON sessions(expires_at)",
     """
     CREATE TABLE model_endpoints (
       id TEXT PRIMARY KEY,
@@ -113,6 +111,44 @@ MIGRATION_1 = (
     "CREATE INDEX artifacts_job_id_idx ON artifacts(job_id)",
 )
 
+# Version 1 shipped a ``username COLLATE NOCASE UNIQUE`` column. SQLite's NOCASE collation only
+# folds ASCII, so "Élodie" and "élodie" registered as two accounts. Version 2 rebuilds the table
+# around a persisted ``username_key`` holding Python's ``str.casefold()`` of the display name.
+MIGRATION_2_USERS_TABLE = """
+CREATE TABLE users_migration_2 (
+  id TEXT PRIMARY KEY,
+  username TEXT NOT NULL,
+  username_key TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  last_login_at TEXT
+)
+"""
+
+# A bare NOT NULL reports "NOT NULL constraint failed: users.username_key", which does not say
+# which invariant a caller broke. BEFORE triggers run ahead of column constraints, so these keep
+# the column NOT NULL while raising the intent.
+MIGRATION_2_TRIGGERS = (
+    """
+    CREATE TRIGGER users_username_key_not_null_insert
+    BEFORE INSERT ON users
+    FOR EACH ROW WHEN NEW.username_key IS NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'username_key must not be null');
+    END
+    """,
+    """
+    CREATE TRIGGER users_username_key_not_null_update
+    BEFORE UPDATE OF username_key ON users
+    FOR EACH ROW WHEN NEW.username_key IS NULL
+    BEGIN
+      SELECT RAISE(ABORT, 'username_key must not be null');
+    END
+    """,
+)
+
+LATEST_SCHEMA_VERSION = 2
+
 
 class Database:
     def __init__(self, path: Path) -> None:
@@ -137,6 +173,11 @@ class Database:
     def migrate(self) -> None:
         with self.connect() as connection:
             self._enable_wal(connection)
+            # Rebuilding `users` drops and renames a table that `sessions`, `model_endpoints`, and
+            # `jobs` reference. Foreign keys cannot be toggled inside a transaction, so this has to
+            # happen before BEGIN; `PRAGMA foreign_key_check` re-validates before the commit, and
+            # every other connection re-enables enforcement in `connect()`.
+            connection.execute("PRAGMA foreign_keys=OFF")
             connection.execute("BEGIN IMMEDIATE")
             connection.execute(
                 """
@@ -146,18 +187,93 @@ class Database:
                 )
                 """
             )
-            already_applied = connection.execute(
-                "SELECT 1 FROM schema_migrations WHERE version = 1"
-            ).fetchone()
-            if already_applied is not None:
+            applied = {
+                row["version"]
+                for row in connection.execute("SELECT version FROM schema_migrations")
+            }
+            newest_applied = max(applied, default=0)
+            if newest_applied > LATEST_SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Database at {self.path} has a newer schema version {newest_applied} "
+                    f"than this AISBench Web release supports "
+                    f"(maximum {LATEST_SCHEMA_VERSION}); upgrade aisbench-web"
+                )
+
+            migrations = ((1, self._apply_migration_1), (2, self._apply_migration_2))
+            pending = [(version, apply) for version, apply in migrations if version not in applied]
+            if not pending:
                 return
 
-            for statement in MIGRATION_1:
-                connection.execute(statement)
-            connection.execute(
-                "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
-                (1, datetime.now(timezone.utc).isoformat()),
-            )
+            for version, apply in pending:
+                apply(connection)
+                connection.execute(
+                    "INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)",
+                    (version, datetime.now(timezone.utc).isoformat()),
+                )
+
+            violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise RuntimeError(
+                    f"Migrating {self.path} left {len(violations)} foreign key violations, "
+                    f"starting with table {violations[0][0]!r}"
+                )
+
+    @staticmethod
+    def _apply_migration_1(connection: sqlite3.Connection) -> None:
+        for statement in MIGRATION_1:
+            connection.execute(statement)
+
+    @staticmethod
+    def _apply_migration_2(connection: sqlite3.Connection) -> None:
+        rows = connection.execute(
+            """
+            SELECT id, username, password_hash, created_at, last_login_at
+            FROM users
+            ORDER BY id
+            """
+        ).fetchall()
+
+        by_key: dict[str, list[str]] = {}
+        for row in rows:
+            by_key.setdefault(row["username"].casefold(), []).append(row["username"])
+        for username_key, usernames in by_key.items():
+            if len(usernames) > 1:
+                collided = " and ".join(repr(username) for username in usernames)
+                raise RuntimeError(
+                    f"Cannot upgrade to schema version 2: username casefold collision "
+                    f"on {username_key!r} between {collided}; rename all but one account "
+                    f"before upgrading aisbench-web"
+                )
+
+        connection.execute(MIGRATION_2_USERS_TABLE)
+        connection.executemany(
+            """
+            INSERT INTO users_migration_2 (
+              id, username, username_key, password_hash, created_at, last_login_at
+            ) VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    row["id"],
+                    row["username"],
+                    row["username"].casefold(),
+                    row["password_hash"],
+                    row["created_at"],
+                    row["last_login_at"],
+                )
+                for row in rows
+            ],
+        )
+        connection.execute("DROP TABLE users")
+        connection.execute("ALTER TABLE users_migration_2 RENAME TO users")
+        for statement in MIGRATION_2_TRIGGERS:
+            connection.execute(statement)
+
+        # Expired sessions are cleared on the next login, not here: an interrupted upgrade should
+        # not be the reason a signed-in user is logged out.
+        connection.execute(
+            "CREATE INDEX IF NOT EXISTS sessions_expires_at_idx ON sessions(expires_at)"
+        )
 
     def _enable_wal(self, connection: sqlite3.Connection) -> None:
         last_error = None
