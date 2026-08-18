@@ -11,6 +11,7 @@ from starlette.responses import JSONResponse
 from aisbench_web.api.auth import router as auth_router
 from aisbench_web.api.datasets import router as datasets_router
 from aisbench_web.api.models import router as models_router
+from aisbench_web.api.results import router as results_router
 from aisbench_web.datasets.catalog import CatalogService
 from aisbench_web.db import Database
 from aisbench_web.jobs.worker import Worker, recover_interrupted_jobs
@@ -220,5 +221,6 @@ def create_app(
     app.include_router(auth_router)
     app.include_router(models_router)
     app.include_router(datasets_router)
+    app.include_router(results_router)
 
     return app

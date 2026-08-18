@@ -13,6 +13,7 @@ from aisbench_web.jobs.config_generator import (
     render_config,
 )
 from aisbench_web.jobs.process_runner import ProcessRunner
+from aisbench_web.jobs.results import index_artifacts, parse_results
 from aisbench_web.jobs.states import JobStatus
 from aisbench_web.repositories.jobs import Job, JobRepository
 from aisbench_web.security import api_key_cipher, load_or_create_secret
@@ -49,7 +50,7 @@ class Worker:
         self.settings = settings
         self.repository = JobRepository(database)
         self.runner = runner or ProcessRunner()
-        self.result_parser = result_parser
+        self.result_parser = result_parser or self._store_results
         self.poll_interval = poll_interval
         self._stopping = threading.Event()
         self._thread: threading.Thread | None = None
@@ -205,9 +206,26 @@ class Worker:
             error_message=f"AISBench exited with status {exit_code}",
         )
 
+    def _store_results(self, job: Job, output_dir: Path) -> None:
+        parsed = parse_results(job.mode, output_dir)
+        for warning in parsed.warnings:
+            logger.info("Job %s: %s", job.id, warning)
+        self.repository.replace_metrics(
+            job.id,
+            {
+                key: (metric.value, metric.text_value, metric.unit)
+                for key, metric in parsed.metrics.items()
+            },
+        )
+        self.repository.replace_artifacts(
+            job.id,
+            [
+                (artifact.kind, artifact.relative_path, artifact.content_type)
+                for artifact in index_artifacts(output_dir)
+            ],
+        )
+
     def _parse_results(self, job: Job) -> None:
-        if self.result_parser is None:
-            return
         try:
             self.result_parser(job, self.settings.jobs_dir / job.output_dir)
         except Exception:

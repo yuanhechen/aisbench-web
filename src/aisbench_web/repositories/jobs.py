@@ -26,6 +26,23 @@ SELECTED_COLUMNS = (
 
 
 @dataclass(frozen=True)
+class StoredMetric:
+    key: str
+    value: float | None
+    text_value: str | None
+    unit: str | None
+
+
+@dataclass(frozen=True)
+class StoredArtifact:
+    id: str
+    job_id: str
+    kind: str
+    relative_path: str
+    content_type: str
+
+
+@dataclass(frozen=True)
 class Job:
     id: str
     owner_id: str
@@ -118,6 +135,87 @@ class JobRepository:
                 ),
             )
         return job
+
+    def replace_metrics(
+        self,
+        job_id: str,
+        metrics: dict[str, tuple[float | None, str | None, str | None]],
+    ) -> None:
+        """Metrics are derived from the job's own output, so a re-parse replaces them wholly."""
+        with self.database.connect() as connection:
+            connection.execute("DELETE FROM job_metrics WHERE job_id = ?", (job_id,))
+            connection.executemany(
+                """
+                INSERT INTO job_metrics (job_id, key, value, text_value, unit)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                [
+                    (job_id, key, value, text_value, unit)
+                    for key, (value, text_value, unit) in metrics.items()
+                ],
+            )
+
+    def replace_artifacts(self, job_id: str, artifacts: list[tuple[str, str, str]]) -> None:
+        timestamp = self._now()
+        with self.database.connect() as connection:
+            connection.execute("DELETE FROM artifacts WHERE job_id = ?", (job_id,))
+            connection.executemany(
+                """
+                INSERT INTO artifacts (id, job_id, kind, relative_path, content_type, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (str(uuid4()), job_id, kind, relative_path, content_type, timestamp)
+                    for kind, relative_path, content_type in artifacts
+                ],
+            )
+
+    def list_metrics_for_owner(self, job_id: str, owner_id: str) -> list[StoredMetric]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT key, value, text_value, unit
+                FROM job_metrics
+                JOIN jobs ON jobs.id = job_metrics.job_id
+                WHERE job_metrics.job_id = ? AND jobs.owner_id = ?
+                ORDER BY key
+                """,
+                (job_id, owner_id),
+            ).fetchall()
+        return [StoredMetric(**dict(row)) for row in rows]
+
+    def list_artifacts_for_owner(self, job_id: str, owner_id: str) -> list[StoredArtifact]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT artifacts.id, artifacts.job_id, kind, relative_path, content_type
+                FROM artifacts
+                JOIN jobs ON jobs.id = artifacts.job_id
+                WHERE artifacts.job_id = ? AND jobs.owner_id = ?
+                ORDER BY relative_path
+                """,
+                (job_id, owner_id),
+            ).fetchall()
+        return [StoredArtifact(**dict(row)) for row in rows]
+
+    def get_artifact_for_owner(
+        self,
+        job_id: str,
+        artifact_id: str,
+        owner_id: str,
+    ) -> StoredArtifact | None:
+        """An artifact is addressed only by ID; the stored path is never accepted from a client."""
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT artifacts.id, artifacts.job_id, kind, relative_path, content_type
+                FROM artifacts
+                JOIN jobs ON jobs.id = artifacts.job_id
+                WHERE artifacts.id = ? AND artifacts.job_id = ? AND jobs.owner_id = ?
+                """,
+                (artifact_id, job_id, owner_id),
+            ).fetchone()
+        return None if row is None else StoredArtifact(**dict(row))
 
     def get_for_owner(self, job_id: str, owner_id: str) -> Job | None:
         with self.database.connect() as connection:

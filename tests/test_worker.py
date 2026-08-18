@@ -350,6 +350,30 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+# --- results ------------------------------------------------------------------
+
+
+def test_a_successful_run_stores_metrics_and_artifacts(harness: Harness) -> None:
+    job = harness.queue()
+
+    harness.worker.run_pending_once()
+
+    metrics = {m.key: m for m in harness.jobs.list_metrics_for_owner(job.id, harness.owner)}
+    artifacts = {a.relative_path: a for a in harness.jobs.list_artifacts_for_owner(job.id, harness.owner)}
+    assert metrics["gsm8k.accuracy"].value == 87.5
+    assert artifacts["summary/summary_test.csv"].kind == "summary"
+    assert artifacts["summary/summary_test.csv"].content_type == "text/csv"
+
+
+def test_a_failed_run_stores_no_metrics(harness: Harness) -> None:
+    harness.set_scenario("fail")
+    job = harness.queue()
+
+    harness.worker.run_pending_once()
+
+    assert harness.jobs.list_metrics_for_owner(job.id, harness.owner) == []
+
+
 # --- lifespan wiring ---------------------------------------------------------
 
 
