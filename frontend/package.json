@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "screenshot": "node e2e/screenshot.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.563.0",

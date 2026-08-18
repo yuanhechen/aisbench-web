@@ -179,6 +179,13 @@ body {
   width: 100%;
 }
 
+.auth-card .button-primary,
+.form-step .button-primary,
+.form-step .button-secondary {
+  align-self: flex-start;
+  margin-top: 12px;
+}
+
 .auth-title {
   font-size: 20px;
   font-weight: 600;
@@ -212,7 +219,9 @@ body {
 
 .field {
   color: var(--text-secondary);
+  display: block;
   font-size: 13px;
+  margin-bottom: 4px;
   margin-top: 4px;
 }
 
@@ -242,23 +251,32 @@ body {
   margin: 4px 0 0;
 }
 
-.button-primary {
-  background: var(--text);
-  border: 0;
+.button-primary,
+.button-secondary,
+.button-danger {
+  border: 1px solid transparent;
   border-radius: 8px;
-  color: var(--canvas);
   cursor: pointer;
   font: inherit;
-  margin-top: 12px;
-  padding: 8px 12px;
+  line-height: 1.4;
+  padding: 6px 12px;
 }
 
-.button-primary:disabled {
+.button-primary {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--canvas);
+}
+
+.button-primary:disabled,
+.button-secondary:disabled,
+.button-danger:disabled {
+  cursor: default;
   opacity: 0.6;
 }
 
 .workspace-header-row {
-  align-items: flex-start;
+  align-items: center;
   display: flex;
   gap: 16px;
   justify-content: space-between;
@@ -266,20 +284,12 @@ body {
 
 .button-secondary {
   background: var(--canvas);
-  border: 1px solid var(--selected);
-  border-radius: 8px;
+  border-color: var(--selected);
   color: var(--text);
-  cursor: pointer;
-  font: inherit;
-  padding: 6px 10px;
 }
 
 .button-secondary:hover:not(:disabled) {
   background: var(--sidebar);
-}
-
-.button-secondary:disabled {
-  color: var(--text-tertiary);
 }
 
 .empty-state {
@@ -409,10 +419,11 @@ body {
 }
 
 .modal-actions {
+  align-items: center;
   display: flex;
   gap: 8px;
   justify-content: flex-end;
-  margin-top: 12px;
+  margin-top: 16px;
 }
 
 .form-step {
@@ -474,6 +485,7 @@ select.input {
 }
 
 .filter-row .field {
+  display: inline-block;
   margin: 0;
 }
 
@@ -566,12 +578,8 @@ select.input {
 
 .button-danger {
   background: var(--danger);
-  border: 0;
-  border-radius: 8px;
+  border-color: var(--danger);
   color: var(--canvas);
-  cursor: pointer;
-  font: inherit;
-  padding: 6px 10px;
 }
 
 .checkbox-list {
