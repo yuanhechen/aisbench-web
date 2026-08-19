@@ -515,8 +515,8 @@ def test_a_bare_shot_count_is_read_too(aisbench_configs: Path) -> None:
     assert SHOTS.search("gsm8k_gen_4_shot_cot_chat_prompt").group(1) == "4"
 
 
-# Only the vllm_api configs have been seen first hand, so these shapes are deliberately
-# varied to check the scan does not depend on one family's spelling.
+# AISBench declares `attr` on every model config; hf_model.py documents it as "local or
+# service". A config without one is not an endpoint, and the catalog logs what it skipped.
 MODEL_CONFIG_SHAPES = {
     "declares_service": """
 from ais_bench.benchmark.models import SomeAPI
@@ -526,23 +526,18 @@ models = [dict(attr="service", type=SomeAPI, abbr="a", host_ip="localhost", host
 from ais_bench.benchmark.models import SomeAPI
 models = [dict(attr='service', type=SomeAPI, abbr='b', url='')]
 """,
-    "no_attr_but_an_endpoint": """
-from ais_bench.benchmark.models import SomeAPI
-models = [dict(type=SomeAPI, abbr="c", host_ip="localhost", host_port=8080, max_out_len=512)]
-""",
-    "no_attr_and_a_local_path": """
+    "declares_local": """
 from ais_bench.benchmark.models import SomeLocal
-models = [dict(type=SomeLocal, abbr="d", path="/models/Qwen", batch_size=1)]
+models = [dict(attr="local", type=SomeLocal, abbr="c", path="/models/Qwen")]
 """,
-    "declares_offline": """
+    "declares_nothing": """
 from ais_bench.benchmark.models import SomeLocal
-models = [dict(attr="offline", type=SomeLocal, abbr="e", path="/models/Qwen", url="")]
+models = [dict(type=SomeLocal, abbr="d", host_ip="localhost")]
 """,
 }
 
 
-def test_a_model_config_is_recognised_by_shape_not_by_family(tmp_path: Path) -> None:
-    """A family that spells itself differently would otherwise vanish from the list."""
+def test_only_a_config_declaring_service_drives_an_endpoint(tmp_path: Path) -> None:
     from aisbench_web.datasets.scan import scan_model_configs
 
     family = tmp_path / "ais_bench" / "benchmark" / "configs" / "models" / "some_family"
@@ -550,11 +545,14 @@ def test_a_model_config_is_recognised_by_shape_not_by_family(tmp_path: Path) -> 
     for name, source in MODEL_CONFIG_SHAPES.items():
         (family / f"{name}.py").write_text(source, encoding="utf-8")
 
-    offered = {
-        config.name for config in scan_model_configs(tmp_path / "ais_bench") if config.is_service
-    }
+    scanned = {config.name: config for config in scan_model_configs(tmp_path / "ais_bench")}
 
-    assert offered == {"declares_service", "single_quoted_attr", "no_attr_but_an_endpoint"}
-    # An explicit attr wins over the presence of an endpoint field.
-    assert "declares_offline" not in offered
-    assert "no_attr_and_a_local_path" not in offered
+    assert {name for name, config in scanned.items() if config.is_service} == {
+        "declares_service",
+        "single_quoted_attr",
+    }
+    # Found but not offered, which the catalog logs rather than passing over in silence.
+    assert set(scanned) - {"declares_service", "single_quoted_attr"} == {
+        "declares_local",
+        "declares_nothing",
+    }

@@ -1,17 +1,20 @@
-# What is actually known about AISBench's configs/models tree
+# AISBench configs/models tree
 
-Recorded from `ls` on the test server before it became unreachable.
+Read from the AISBench source at `~/code/benchmark`, so this is the tree itself rather than
+anything recorded or reconstructed.
 
-| Path | Evidence |
-| --- | --- |
-| `configs/models/` | Listed: hf_models, lmm_models, mindie_api, tgi_api, triton_api, vita, vllm_api, vllm_offline_models |
-| `configs/models/vllm_api/` | Listed: vllm_api_function_call_chat.py, vllm_api_general_chat.py, vllm_api_general.py, vllm_api_general_stream.py, vllm_api_stream_chat_multiturn.py, vllm_api_stream_chat.py |
-| `configs/models/lmm_models/` | Listed, truncated at 5: qwen_image_edit.py |
-| `vllm_api_general_chat.py` | Read in full |
-| `vllm_api_general_stream.py` | Read in full |
-| `vllm_api_stream_chat.py` | Read in full |
-| Everything else | **Not seen.** File names under mindie_api, tgi_api, triton_api, hf_models, vita and vllm_offline_models are unknown, as is whether their configs declare `attr="service"`. |
+| Family | Configs | Drives an endpoint |
+| --- | --- | --- |
+| `vllm_api` | vllm_api_function_call_chat, vllm_api_general, vllm_api_general_chat, vllm_api_general_stream, vllm_api_stream_chat, vllm_api_stream_chat_multiturn | yes |
+| `mindie_api` | mindie_stream_api_general | yes |
+| `tgi_api` | tgi_api_general, tgi_stream_api_general | yes |
+| `triton_api` | triton_api_general, triton_stream_api_general | yes |
+| `vita` | vita_generate_chat | yes |
+| `hf_models` | hf_base_model, hf_causal_lm, hf_chat_model, hf_model, hf_qwenvl_model | no |
+| `lmm_models` | qwen_image_edit | no |
+| `vllm_offline_models` | vllm_offline_vl_model | no |
 
-The local tree under `scratchpad/realtree` contains only the entries with evidence,
-plus `vllm_offline_models/vllm_qwen.py`, which is written by hand as an offline example and
-is not a copy of anything.
+Twelve of the nineteen drive an HTTP endpoint. `attr` is AISBench's own discriminator: every
+config declares `"service"` or `"local"`, and `hf_model.py` documents the choice in a comment
+next to it. Nothing else is needed to tell them apart, and a config that declares neither is
+logged rather than passed over in silence.
