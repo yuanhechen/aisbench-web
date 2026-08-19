@@ -49,8 +49,8 @@ export interface Job {
   status: string;
   queue_position: number | null;
   progress: { completed: number; total: number } | null;
-  model: { name: string; model_name: string; base_url: string };
-  dataset: { id: string; name: string };
+  model: { name: string; model_name: string; base_url: string; config_name: string };
+  dataset: { id: string; name: string; config_name: string };
   parameters: Record<string, unknown>;
   exit_code: number | null;
   error_code: string | null;

@@ -536,6 +536,77 @@ select.input {
   padding: 14px 0;
 }
 
+.task-context-status {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+}
+
+/* One line of facts about the run, not a section of its own. */
+.task-meta {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  margin: 10px 0 0;
+}
+
+/* The reason the page exists: readable before anything else on it. */
+.metric-headline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 48px;
+  padding: 10px 0 4px;
+}
+
+.metric-name {
+  color: var(--text-secondary);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  margin: 0;
+}
+
+.metric-value {
+  font-size: 40px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin: 2px 0 0;
+}
+
+/* Reference material: present, and out of the way until asked for. */
+.task-fold > summary {
+  color: var(--text-secondary);
+  cursor: pointer;
+  font-size: 13px;
+  list-style-position: outside;
+}
+
+.task-fold[open] > summary {
+  margin-bottom: 12px;
+}
+
+.fold-count {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
+}
+
+.artifact-groups {
+  display: grid;
+  gap: 14px 32px;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.artifact-kind {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin: 0 0 4px;
+}
+
+.config-row-wide {
+  grid-column: 1 / -1;
+}
+
 .config-row {
   display: grid;
   gap: 12px 24px;

@@ -19,9 +19,18 @@ const JOB = {
   status: "running",
   queue_position: null,
   progress: { completed: 512, total: 800 },
-  model: { name: "Qwen3", model_name: "Qwen3-32B", base_url: "http://127.0.0.1:8001/v1" },
-  dataset: { id: "gsm8k", name: "GSM8K" },
-  parameters: { num_prompts: 8 },
+  model: {
+    name: "Qwen3",
+    model_name: "Qwen3-32B",
+    base_url: "http://127.0.0.1:8001/v1",
+    config_name: "vllm_api_general_chat",
+  },
+  dataset: { id: "gsm8k", name: "GSM8K", config_name: "gsm8k_gen_0_shot" },
+  parameters: {
+    config_fields: { batch_size: 16 },
+    generation_kwargs: { temperature: 0.7 },
+    cli: { num_prompts: 8, max_num_workers: 1, merge_datasets: true },
+  },
   exit_code: null,
   error_code: null,
   error_message: null,
@@ -29,6 +38,15 @@ const JOB = {
   started_at: "2026-08-18T12:00:01+00:00",
   finished_at: null,
 };
+
+/** The fold holding the run log, named by its summary rather than by its position. */
+function logFold(container: HTMLElement): HTMLElement | null {
+  return (
+    [...container.querySelectorAll("details")].find((fold) =>
+      fold.querySelector("summary")?.textContent?.includes("运行日志"),
+    ) ?? null
+  );
+}
 
 function renderDetail(jobId = "job-1") {
   return render(
@@ -267,6 +285,142 @@ describe("job detail", () => {
     expect(sandbox).toContain("allow-scripts");
     // allow-same-origin would hand the embedded page this origin's cookies and DOM.
     expect(sandbox).not.toContain("allow-same-origin");
+    fake.restore();
+  });
+
+  it("prints the parameters instead of the word Object", async () => {
+    // Parameters arrive in groups; stringifying a group renders "[object Object]", which
+    // tells the reader nothing about what was run.
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    await user.click(await screen.findByText("配置快照"));
+    expect(screen.getByText(/batch_size=16/)).toBeInTheDocument();
+    expect(screen.getByText(/temperature=0.7/)).toBeInTheDocument();
+    // A command line, written the way it would have been typed.
+    expect(screen.getByText("--num-prompts 8 --max-num-workers 1 --merge-ds")).toBeInTheDocument();
+    expect(screen.queryByText(/object Object/)).not.toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("drops the progress bar once there is nothing left to progress", async () => {
+    server.use(
+      http.get("/api/jobs/job-1", () =>
+        HttpResponse.json({
+          ...JOB,
+          status: "succeeded",
+          progress: { completed: 8, total: 8 },
+          finished_at: "2026-08-18T12:00:15+00:00",
+        }),
+      ),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
+    );
+    const fake = installFakeWebSocket();
+    const { container } = renderDetail();
+
+    await screen.findByText("已成功");
+    // The status label already says it finished; a full bar repeats it and says nothing.
+    expect(container.querySelector(".progress-track")).toBeNull();
+    expect(screen.getByText(/用时 14s/)).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("opens the log when the log is the answer, and folds it when it is not", async () => {
+    const failing = { ...JOB, status: "failed", error_message: "boom" };
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json(failing)),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 4, text: "trace" })),
+    );
+    const fake = installFakeWebSocket();
+    const { container, unmount } = renderDetail();
+
+    await screen.findByText("boom");
+    expect(logFold(container)).toHaveAttribute("open");
+    unmount();
+    fake.restore();
+
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
+    );
+    const second = installFakeWebSocket();
+    const done = renderDetail();
+
+    await screen.findByText("已成功");
+    expect(logFold(done.container)).not.toHaveAttribute("open");
+    second.restore();
+  });
+
+  it("groups the output files and stops repeating the run directory", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () =>
+        HttpResponse.json([
+          {
+            id: "a1",
+            kind: "config",
+            relative_path: "20260819_101550/configs/20260819_101550_1.py",
+            content_type: "text/x-python",
+          },
+          {
+            id: "a2",
+            kind: "summary",
+            relative_path: "20260819_101550/summary/summary_20260819_101550.md",
+            content_type: "text/markdown",
+          },
+        ]),
+      ),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    await user.click(await screen.findByText(/原始输出/));
+    // Every path of a run starts with the same run directory, so printing it eight times
+    // pushes the part that differs off to the right.
+    expect(
+      screen.getByRole("link", { name: "summary/summary_20260819_101550.md" }),
+    ).toHaveAttribute("href", "/api/jobs/job-1/artifacts/a2");
+    expect(screen.getByText("汇总")).toBeInTheDocument();
+    expect(screen.getByText("生成的配置")).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("shows an older job's parameters rather than claiming it used defaults", async () => {
+    // Jobs submitted before parameters were split stored one flat dict. Reading it with the
+    // new keys finds nothing, and "all defaults" would be a false claim about that run.
+    const user = userEvent.setup();
+    server.use(
+      http.get("/api/jobs/job-1", () =>
+        HttpResponse.json({
+          ...JOB,
+          status: "succeeded",
+          parameters: { num_prompts: 8, max_num_workers: 4 },
+        }),
+      ),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    await user.click(await screen.findByText("配置快照"));
+    expect(screen.getByText(/num_prompts=8/)).toBeInTheDocument();
+    expect(screen.queryByText("全部沿用默认值")).not.toBeInTheDocument();
     fake.restore();
   });
 
