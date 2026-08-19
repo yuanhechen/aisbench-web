@@ -272,6 +272,27 @@ describe("new evaluation", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("性能");
   });
 
+  it("does not repeat the model when the endpoint is named after it", async () => {
+    server.use(
+      http.get("/api/models", () =>
+        HttpResponse.json([
+          { ...MODEL, id: "m1", name: "Qwen3-32B", model_name: "/models/Qwen3-32B" },
+          { ...MODEL, id: "m2", name: "生产环境", model_name: "/models/Qwen3-32B" },
+          { ...MODEL, id: "m3", name: "未探测", model_name: "" },
+        ]),
+      ),
+    );
+    renderAt("/jobs/new");
+
+    const select = await screen.findByLabelText("模型端点");
+    // Named after its model: printing both repeats one long string twice.
+    expect(within(select).getByRole("option", { name: "Qwen3-32B" })).toBeInTheDocument();
+    // Named something else: the model is the fact the name is missing.
+    expect(within(select).getByRole("option", { name: "生产环境 · Qwen3-32B" })).toBeInTheDocument();
+    // Nothing detected yet: there is nothing to append.
+    expect(within(select).getByRole("option", { name: "未探测" })).toBeInTheDocument();
+  });
+
   it("cannot be submitted before a model and dataset are chosen", async () => {
     renderAt("/jobs/new");
 

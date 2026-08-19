@@ -1,6 +1,7 @@
 import { chromium } from "@playwright/test";
 const BASE = process.env.BASE ?? "http://127.0.0.1:8000";
-const browser = await chromium.launch();
+// Chromium inherits the system proxy, which does not reach the service.
+const browser = await chromium.launch({ args: ["--no-proxy-server"] });
 const page = await browser.newPage({ viewportSize: { width: 1280, height: 900 } });
 
 const requests = [];

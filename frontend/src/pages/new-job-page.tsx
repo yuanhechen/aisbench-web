@@ -221,7 +221,7 @@ export function NewJobPage() {
           <option value="">{t("newJob.choose")}</option>
           {activeModels.map((model) => (
             <option key={model.id} value={model.id}>
-              {model.model_name === "" ? model.name : `${model.name} · ${model.model_name}`}
+              {describeEndpoint(model)}
             </option>
           ))}
         </select>
@@ -500,6 +500,25 @@ export function NewJobPage() {
       </section>
     </form>
   );
+}
+
+/**
+ * The endpoint's own name, plus the model only when the name does not already say it.
+ *
+ * Naming an endpoint after its model is the obvious thing to do, and printing both then
+ * repeats one long string twice. A served id often carries a path, so the comparison is
+ * against its last segment.
+ */
+function describeEndpoint(model: ModelEndpoint): string {
+  if (model.model_name === "") {
+    return model.name;
+  }
+  const served = model.model_name.split("/").filter(Boolean).pop() ?? model.model_name;
+  const name = model.name.trim().toLowerCase();
+  if (name === served.toLowerCase() || name === model.model_name.toLowerCase()) {
+    return model.name;
+  }
+  return `${model.name} · ${served}`;
 }
 
 function NumberField({

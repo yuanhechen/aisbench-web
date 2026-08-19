@@ -11,7 +11,8 @@ const OUT = process.env.OUT ?? "/tmp/aisbench";
 const USER = process.env.WEB_USER ?? "alice";
 const PASSWORD = process.env.WEB_PASSWORD ?? "";
 
-const browser = await chromium.launch();
+// Chromium inherits the system proxy, which does not reach the service.
+const browser = await chromium.launch({ args: ["--no-proxy-server"] });
 const page = await browser.newPage({ viewportSize: { width: 1280, height: 900 } });
 
 // Recorded only after sign-in: a 401 from /api/me before it is the normal signed-out path.
