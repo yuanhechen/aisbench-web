@@ -9,7 +9,7 @@ import { AuthProvider } from "../auth/auth-context";
 import { installFakeWebSocket } from "../test/fake-websocket";
 import { server } from "../test/server";
 import { JobDetailPage } from "./job-detail-page";
-import { splitRow } from "../components/job-summary";
+import { splitRow } from "../components/job-result";
 
 const ALICE = { id: "u1", username: "alice" };
 
@@ -334,11 +334,15 @@ describe("job detail", () => {
     fake.restore();
   });
 
-  it("opens the log when the log is the answer, and folds it when it is not", async () => {
-    const failing = { ...JOB, status: "failed", error_message: "boom" };
+  it("shows the log without being asked, whatever the job did", async () => {
+    // Folding it left a one-line bar beside an empty column, and the log is where a run
+    // says what it actually did. Its own scroll caps what it can take from the page.
     server.use(
-      http.get("/api/jobs/job-1", () => HttpResponse.json(failing)),
+      http.get("/api/jobs/job-1", () =>
+        HttpResponse.json({ ...JOB, status: "failed", error_message: "boom" }),
+      ),
       http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 4, text: "trace" })),
+      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
     );
     const fake = installFakeWebSocket();
     const { container, unmount } = renderDetail();
@@ -350,7 +354,7 @@ describe("job detail", () => {
 
     server.use(
       http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
-      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "done" })),
       http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
       http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
     );
@@ -358,7 +362,7 @@ describe("job detail", () => {
     const done = renderDetail();
 
     await screen.findByText("已成功");
-    expect(logFold(done.container)).not.toHaveAttribute("open");
+    expect(logFold(done.container)).toHaveAttribute("open");
     second.restore();
   });
 
@@ -422,11 +426,16 @@ describe("job detail", () => {
     fake.restore();
   });
 
-  it("shows the summary AISBench wrote, as a table rather than as a file to download", async () => {
+  it("says what one evaluated dataset is in a line, not in a one-row table", async () => {
+    // A table with a header and a single row of data is a table drawn for its own sake.
     server.use(
       http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
       http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
-      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/metrics", () =>
+        HttpResponse.json([
+          { key: "gsm8k.accuracy", value: 82.5, text_value: null, unit: null },
+        ]),
+      ),
       http.get("/api/jobs/job-1/artifacts", () =>
         HttpResponse.json([
           {
@@ -445,6 +454,76 @@ describe("job detail", () => {
       ),
       // The .txt concatenates three formats with banner rules between them; the .csv is
       // the table on its own, so that is the one worth reading.
+      http.get("/api/jobs/job-1/artifacts/sum-csv", () => HttpResponse.text("dataset,version,metric,mode,Qwen3-32B\ngsm8k,f588a9,accuracy,gen,82.50")),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    expect(await screen.findByText(/version f588a9/)).toBeInTheDocument();
+    expect(screen.getByText(/mode gen/)).toBeInTheDocument();
+    expect(screen.queryByRole("table")).not.toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("gives several evaluated datasets the columns they need", async () => {
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () =>
+        HttpResponse.json([
+          { key: "gsm8k.accuracy", value: 82.5, text_value: null, unit: null },
+        ]),
+      ),
+      http.get("/api/jobs/job-1/artifacts", () =>
+        HttpResponse.json([
+          {
+            id: "sum-txt",
+            kind: "summary",
+            relative_path: "20260819_101550/summary/summary.txt",
+            content_type: "text/plain",
+          },
+          {
+            id: "sum-csv",
+            kind: "summary",
+            relative_path: "20260819_101550/summary/summary.csv",
+            content_type: "text/csv",
+          },
+        ]),
+      ),
+      // The .txt concatenates three formats with banner rules between them; the .csv is
+      // the table on its own, so that is the one worth reading.
+      http.get("/api/jobs/job-1/artifacts/sum-csv", () => HttpResponse.text("dataset,version,metric,mode,Qwen3-32B\ngsm8k,f588a9,accuracy,gen,82.50\nmath,aa11,accuracy,gen,41.00")),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    const summary = await screen.findByRole("table");
+    expect(within(summary).getByRole("columnheader", { name: "Qwen3-32B" })).toBeInTheDocument();
+    expect(within(summary).getByText("41.00")).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("leaves the dataset and the metric out of the line that gives them context", async () => {
+    // The heading names the dataset and the number is labelled with its metric, so
+    // "dataset gsm8k · metric accuracy" spends its first half on what was just read.
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () =>
+        HttpResponse.json([
+          { key: "gsm8k.accuracy", value: 82.5, text_value: null, unit: null },
+        ]),
+      ),
+      http.get("/api/jobs/job-1/artifacts", () =>
+        HttpResponse.json([
+          {
+            id: "sum-csv",
+            kind: "summary",
+            relative_path: "20260819_101550/summary/summary.csv",
+            content_type: "text/csv",
+          },
+        ]),
+      ),
       http.get("/api/jobs/job-1/artifacts/sum-csv", () =>
         HttpResponse.text("dataset,version,metric,mode,Qwen3-32B\ngsm8k,f588a9,accuracy,gen,82.50"),
       ),
@@ -452,10 +531,10 @@ describe("job detail", () => {
     const fake = installFakeWebSocket();
     renderDetail();
 
-    const summary = await screen.findByRole("table");
-    expect(within(summary).getByRole("columnheader", { name: "Qwen3-32B" })).toBeInTheDocument();
-    expect(within(summary).getByText("f588a9")).toBeInTheDocument();
-    expect(within(summary).getByText("82.50")).toBeInTheDocument();
+    const context = await screen.findByText(/f588a9/);
+    expect(context).toHaveTextContent("version f588a9 · mode gen");
+    expect(context).not.toHaveTextContent("dataset");
+    expect(context).not.toHaveTextContent("metric");
     fake.restore();
   });
 
@@ -505,13 +584,27 @@ describe("job list", () => {
     );
     render(<App initialUser={ALICE} initialPath="/jobs" />);
 
-    expect(await screen.findByRole("link", { name: "GSM8K 精度基线" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "MMLU 任务" })).toBeInTheDocument();
+    // Scoped to the table: the sidebar links to these same jobs as recent work.
+    const table = await screen.findByRole("table");
+    expect(within(table).getByRole("link", { name: "GSM8K 精度基线" })).toBeInTheDocument();
+    expect(within(table).getByRole("link", { name: "MMLU 任务" })).toBeInTheDocument();
 
     await user.selectOptions(screen.getByLabelText("状态筛选"), "succeeded");
 
-    expect(screen.queryByRole("link", { name: "GSM8K 精度基线" })).not.toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "MMLU 任务" })).toBeInTheDocument();
+    expect(within(table).queryByRole("link", { name: "GSM8K 精度基线" })).not.toBeInTheDocument();
+    expect(within(table).getByRole("link", { name: "MMLU 任务" })).toBeInTheDocument();
+  });
+
+  it("offers the way back to recent work from every page", async () => {
+    // The rail had markup for this and nothing ever filled it, so it sat empty on a
+    // 244px column while the jobs it would list were one click away.
+    server.use(http.get("/api/jobs", () => HttpResponse.json([JOB])));
+    render(<App initialUser={ALICE} initialPath="/models" />);
+
+    const rail = await screen.findByRole("navigation");
+    expect(
+      await within(rail).findByRole("link", { name: "GSM8K 精度基线" }),
+    ).toHaveAttribute("href", "/jobs/job-1");
   });
 
   it("uses a flat table with no metric cards", async () => {

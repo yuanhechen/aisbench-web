@@ -1,16 +1,5 @@
-import { useState } from "react";
-
-import { useApiQuery } from "../api/use-query";
-import { useAuth } from "../auth/auth-context";
 import { useI18n } from "../i18n/i18n-context";
 import type { MessageKey } from "../i18n/messages";
-
-interface Metric {
-  key: string;
-  value: number | null;
-  text_value: string | null;
-  unit: string | null;
-}
 
 export interface Artifact {
   id: string;
@@ -19,7 +8,6 @@ export interface Artifact {
   content_type: string;
 }
 
-const EXTRA_PREFIX = "extra.";
 // AISBench names the run directory after its start time, so every path repeats it.
 const RUN_DIRECTORY = /^\d{8}_\d{6}\//;
 
@@ -34,11 +22,6 @@ const KIND_ORDER: Array<[string, MessageKey]> = [
   ["visualization", "results.kindVisualization"],
   ["other", "results.kindOther"],
 ];
-
-function display(metric: Metric): string {
-  const shown = metric.value !== null ? String(metric.value) : (metric.text_value ?? "");
-  return metric.unit === null ? shown : `${shown} ${metric.unit}`;
-}
 
 /** The path without the run directory every artifact of a run shares. */
 function shortPath(artifact: Artifact): string {
@@ -65,90 +48,6 @@ function extensionOf(artifact: Artifact): string {
   return dot <= 0 ? "" : name.slice(dot + 1);
 }
 
-/** `ARC-c.accuracy` under a heading that already says ARC_c is just `accuracy`. */
-function metricName(key: string, datasetName: string): string {
-  const prefix = `${datasetName.toLowerCase()}.`;
-  return key.toLowerCase().startsWith(prefix) ? key.slice(prefix.length) : key;
-}
-
-/**
- * The numbers the job was run to produce.
- *
- * This is the answer the page exists to give. One number gets the whole stage; a
- * performance run reports a dozen, and twelve hero numbers are no hierarchy at all, so
- * those become a grid that can be scanned instead.
- */
-export function MetricHeadline({
-  metrics,
-  datasetName,
-}: {
-  metrics: Metric[];
-  datasetName: string;
-}) {
-  const single = metrics.length === 1;
-  return (
-    <div className={single ? "metric-hero" : "metric-grid"}>
-      {metrics.map((metric) => (
-        <div className="metric" key={metric.key}>
-          <p className="metric-name" title={metric.key}>
-            {metricName(metric.key, datasetName)}
-          </p>
-          <p className="metric-value">
-            {metric.value !== null ? metric.value : (metric.text_value ?? "")}
-            {metric.unit !== null && <span className="metric-unit">{metric.unit}</span>}
-          </p>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-export function JobMetrics({ jobId, datasetName }: { jobId: string; datasetName: string }) {
-  const { t } = useI18n();
-  const { reportFailure } = useAuth();
-  const metrics = useApiQuery<Metric[]>(`/api/jobs/${jobId}/metrics`, {
-    onFailure: reportFailure,
-  });
-  const [showExtra, setShowExtra] = useState(false);
-
-  const all = metrics.data ?? [];
-  const primary = all.filter((metric) => !metric.key.startsWith(EXTRA_PREFIX));
-  const extra = all.filter((metric) => metric.key.startsWith(EXTRA_PREFIX));
-
-  return (
-    <>
-      {primary.length > 0 && (
-        <section className="card card-result">
-          <MetricHeadline metrics={primary} datasetName={datasetName} />
-          {extra.length > 0 && (
-            <>
-              <button
-                type="button"
-                className="link-button"
-                onClick={() => setShowExtra((current) => !current)}
-              >
-                {showExtra ? t("results.hideExtra") : t("results.showExtra")}
-              </button>
-              {showExtra && (
-                <table className="data-table">
-                  <tbody>
-                    {extra.map((metric) => (
-                      <tr key={metric.key}>
-                        <th scope="row">{metric.key.slice(EXTRA_PREFIX.length)}</th>
-                        <td className="mono">{display(metric)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </>
-          )}
-        </section>
-      )}
-    </>
-  );
-}
-
 export function JobArtifacts({ jobId, artifacts }: { jobId: string; artifacts: Artifact[] }) {
   const { t } = useI18n();
   const found = artifacts;
@@ -157,8 +56,8 @@ export function JobArtifacts({ jobId, artifacts }: { jobId: string; artifacts: A
   return (
     <>
       {visualizations.map((artifact) => (
-        <section className="card" key={artifact.id}>
-          <h2 className="card-title">{t("results.visualization")}</h2>
+        <section className="rail-section" key={artifact.id}>
+          <h2 className="eyebrow">{t("results.visualization")}</h2>
           {/*
             The artifact endpoint authorizes the owner before serving. allow-scripts lets the
             Plotly bundle run; allow-same-origin is deliberately omitted so the frame cannot
@@ -174,10 +73,8 @@ export function JobArtifacts({ jobId, artifacts }: { jobId: string; artifacts: A
       ))}
 
       {found.length > 0 && (
-        <section className="card">
-          <h2 className="card-title">
-            {t("results.artifacts")} <span className="card-count">{found.length}</span>
-          </h2>
+        <section className="rail-section">
+          <h2 className="eyebrow">{t("results.artifacts")}</h2>
           <div className="artifact-groups">
             {KIND_ORDER.map(([kind, label]) => {
               const group = found.filter((artifact) => artifact.kind === kind);

@@ -895,7 +895,9 @@ describe("shared datasets", () => {
     await user.click(await screen.findByRole("button", { name: "安装" }));
 
     expect(await screen.findByText("安装中")).toBeInTheDocument();
-    expect(await screen.findByText("可用", {}, { timeout: 4000 })).toBeInTheDocument();
+    // A dataset's state is read the same way a job's is: the same badge, the same colours.
+    const badge = await screen.findByText("可用", {}, { timeout: 4000 });
+    expect(badge).toHaveClass("status", "status-success");
   });
 
   it("shows why an install failed and allows another attempt", async () => {

@@ -35,6 +35,16 @@
   --line: var(--n-150);
   --selected: var(--n-200);
 
+  /* Space is on a scale so that a gap is chosen, not guessed. Tight inside a group, loose
+     between groups: that spacing is what does the grouping, not a border. */
+  --s-1: 4px;
+  --s-2: 8px;
+  --s-3: 12px;
+  --s-4: 16px;
+  --s-5: 24px;
+  --s-6: 32px;
+  --s-7: 48px;
+
   --r-sm: 6px;
   --r-md: 8px;
   --r-lg: 12px;
@@ -46,6 +56,19 @@
   --ring: 0 0 0 3px rgb(37 99 235 / 18%);
 
   --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+/* The label above a group. Small, spaced and quiet, so a heading is felt as a level rather
+   than read as another line of text. Latin goes up in caps; Chinese has no case, so the
+   weight and the tracking carry it there. */
+.eyebrow {
+  color: var(--n-500);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  line-height: 1.4;
+  margin: 0 0 var(--s-3);
+  text-transform: uppercase;
 }
 
 * {
@@ -149,9 +172,12 @@ body {
 }
 
 .sidebar-section-title {
-  color: var(--text-tertiary);
-  font-size: 12px;
-  padding: 0 8px 6px;
+  color: var(--n-500);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  padding: 0 9px 6px;
+  text-transform: uppercase;
 }
 
 .sidebar-recent {
@@ -161,13 +187,20 @@ body {
 }
 
 .sidebar-recent-item {
-  border-radius: 8px;
+  border-radius: var(--r-md);
   color: var(--text-secondary);
+  font-size: 13px;
   overflow: hidden;
-  padding: 5px 8px;
+  padding: 5px 9px;
   text-decoration: none;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-recent-item[aria-current="page"] {
+  background: var(--canvas);
+  box-shadow: var(--shadow-sm);
+  color: var(--text);
 }
 
 .sidebar-recent-item:hover {
@@ -185,13 +218,13 @@ body {
 .workspace {
   background: var(--canvas);
   overflow-y: auto;
-  padding: 24px 32px 56px;
+  padding: var(--s-5) var(--s-6) var(--s-7);
 }
 
 .workspace-header {
   border-bottom: 1px solid var(--line);
-  margin-bottom: 18px;
-  padding-bottom: 12px;
+  margin-bottom: var(--s-5);
+  padding-bottom: var(--s-3);
 }
 
 .workspace-title {
@@ -313,6 +346,7 @@ body {
 
 .input {
   background: var(--canvas);
+  max-width: 420px;
   border: 1px solid var(--n-300);
   border-radius: var(--r-md);
   color: var(--text);
@@ -615,7 +649,7 @@ input[type="radio"] {
 
 .form-step {
   border-bottom: 1px solid var(--line);
-  padding: 14px 0;
+  padding: var(--s-5) 0;
 }
 
 .form-step:last-of-type {
@@ -623,16 +657,25 @@ input[type="radio"] {
 }
 
 .form-step-title {
-  color: var(--text-tertiary);
-  font-size: 12px;
-  font-weight: 500;
-  letter-spacing: 0.02em;
-  margin: 0 0 10px;
+  color: var(--n-500);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  margin: 0 0 var(--s-3);
+  text-transform: uppercase;
+}
+
+.field-grid .input {
+  max-width: none;
+}
+
+.modal .input {
+  max-width: none;
 }
 
 .field-grid {
   display: grid;
-  gap: 12px;
+  gap: var(--s-3) var(--s-4);
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   max-width: 620px;
 }
@@ -668,8 +711,8 @@ select.input {
   align-items: center;
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 16px;
+  gap: var(--s-2);
+  margin-bottom: var(--s-5);
 }
 
 .filter-row .field {
@@ -754,20 +797,21 @@ select.input {
 .task-view {
   display: flex;
   flex-direction: column;
-  gap: 18px;
-  max-width: 1180px;
+  max-width: 1160px;
 }
 
 .task-context {
   align-items: flex-start;
+  border-bottom: 1px solid var(--line);
   display: flex;
-  gap: 16px;
+  gap: var(--s-4);
   justify-content: space-between;
+  padding-bottom: var(--s-4);
 }
 
 .task-title {
   font-family: var(--mono);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 600;
   letter-spacing: -0.01em;
   margin: 0;
@@ -776,6 +820,7 @@ select.input {
 
 .task-subtitle {
   color: var(--text-secondary);
+  font-size: 13px;
   margin: 3px 0 0;
 }
 
@@ -783,7 +828,7 @@ select.input {
   align-items: center;
   display: flex;
   flex-shrink: 0;
-  gap: 10px;
+  gap: var(--s-3);
 }
 
 .task-confirm {
@@ -791,154 +836,149 @@ select.input {
   font-size: 13px;
 }
 
-/* The run is the subject; what it was run with sits beside it, not on top of it. */
+/* The run is the subject; what it was run with sits beside it, told apart by a single rule
+   rather than by wrapping each half in a box of its own. */
 .task-columns {
-  align-items: start;
+  /* Stretch, so the rule between the columns runs the height of the section instead of
+     stopping wherever the rail happens to end. */
+  align-items: stretch;
   display: grid;
-  gap: 18px;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: var(--s-7);
+  grid-template-columns: minmax(0, 1fr) 296px;
+  padding-top: var(--s-5);
 }
 
-.task-main,
-.task-rail {
+.task-main {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--s-6);
   min-width: 0;
 }
 
-@media (max-width: 980px) {
+.task-rail {
+  border-left: 1px solid var(--n-200);
+  display: flex;
+  flex-direction: column;
+  gap: var(--s-6);
+  min-width: 0;
+  padding-left: var(--s-5);
+}
+
+@media (max-width: 1000px) {
   .task-columns {
+    gap: var(--s-6);
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .task-rail {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding: var(--s-5) 0 0;
   }
 }
 
-.card {
-  background: var(--canvas);
-  border: 1px solid var(--line);
-  border-radius: var(--r-lg);
-  padding: 16px 18px;
-}
-
-.card-title {
-  align-items: center;
-  color: var(--text-secondary);
-  display: flex;
-  font-size: 12.5px;
-  font-weight: 500;
-  gap: 6px;
-  letter-spacing: 0.01em;
-  margin: 0 0 12px;
-}
-
-details.card > summary.card-title {
-  cursor: pointer;
-  list-style: none;
-  margin: 0;
-}
-
-details.card[open] > summary.card-title {
-  margin-bottom: 12px;
-}
-
-details.card > summary.card-title::-webkit-details-marker {
-  display: none;
-}
-
-/* A caret the page draws itself, so it matches the type instead of the browser default. */
-details.card > summary.card-title::before {
-  border-color: transparent transparent transparent currentcolor;
-  border-style: solid;
-  border-width: 4px 0 4px 5px;
-  content: "";
-  display: inline-block;
-  opacity: 0.6;
-  transition: transform 140ms ease;
-}
-
-details.card[open] > summary.card-title::before {
-  transform: rotate(90deg);
-}
-
-.card-count {
-  color: var(--n-400);
-  font-variant-numeric: tabular-nums;
-}
-
-/* The result reads first, so it is the one surface with any lift to it. */
-.card-result {
-  box-shadow: var(--shadow-sm);
-  padding: 18px 22px 20px;
-}
+/* --- the result ------------------------------------------------------------- */
 
 .metric-hero .metric-value {
-  font-size: 46px;
+  font-size: 44px;
 }
 
 .metric-grid {
   display: grid;
-  gap: 18px 28px;
-  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--s-5) var(--s-6);
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
 }
 
 .metric-grid .metric-value {
-  font-size: 25px;
+  font-size: 24px;
 }
 
 .metric-name {
-  color: var(--text-secondary);
-  font-family: var(--mono);
-  font-size: 12px;
-  letter-spacing: 0.01em;
+  color: var(--n-500);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
   margin: 0;
+  text-transform: uppercase;
 }
 
 .metric-value {
   color: var(--text);
   font-variant-numeric: tabular-nums;
   font-weight: 620;
-  letter-spacing: -0.025em;
-  line-height: 1.1;
-  margin: 4px 0 0;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  margin: var(--s-2) 0 0;
 }
 
 .metric-unit {
   color: var(--text-tertiary);
-  font-size: 0.44em;
+  font-size: 0.42em;
   font-weight: 500;
   letter-spacing: 0;
   margin-left: 5px;
 }
 
-.banner {
-  background: var(--n-50);
-  border: 1px solid var(--line);
-  border-radius: var(--r-md);
+/* What the number is of. Directly under it, because apart from it it means nothing. */
+.result-context {
+  color: var(--text-secondary);
+  font-size: 12.5px;
+  margin: var(--s-3) 0 0;
+}
+
+.result-table {
+  margin-top: var(--s-4);
+}
+
+.result-extra {
+  margin-top: var(--s-4);
+}
+
+.result-extra .data-table {
+  margin-top: var(--s-2);
+  max-width: 380px;
+}
+
+/* --- the rail --------------------------------------------------------------- */
+
+.rail-section + .rail-section {
+  margin-top: var(--s-6);
+}
+
+.info-grid {
+  display: grid;
+  gap: var(--s-2) var(--s-3);
+  grid-template-columns: 4.5em minmax(0, 1fr);
   margin: 0;
-  padding: 9px 12px;
 }
 
-.banner-danger {
-  background: var(--danger-weak);
-  border-color: rgb(180 35 24 / 20%);
-  color: var(--danger);
-}
-
-.info-list {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  margin: 0;
-}
-
-.info-row dt {
-  color: var(--text-tertiary);
+.info-grid dt {
+  color: var(--n-500);
   font-size: 12px;
+  line-height: 1.5;
 }
 
-.info-row dd {
-  margin: 1px 0 0;
+.info-grid dd {
+  font-size: 13px;
+  margin: 0;
   overflow-wrap: anywhere;
+}
+
+/* A hairline where one kind of fact ends and the next begins. */
+/* A value that is really a sentence gets the full width, with its label above it. */
+.info-grid dt.info-wide {
+  grid-column: 1 / -1;
+  margin-top: var(--s-1);
+}
+
+.info-grid dd.info-wide {
+  grid-column: 1 / -1;
+}
+
+.info-grid .info-break {
+  border-top: 1px solid var(--line);
+  grid-column: 1 / -1;
+  margin: var(--s-1) 0;
 }
 
 .info-muted {
@@ -948,13 +988,13 @@ details.card[open] > summary.card-title::before {
 .artifact-groups {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--s-4);
 }
 
 .artifact-kind {
-  color: var(--text-tertiary);
+  color: var(--n-500);
   font-size: 12px;
-  margin: 0 0 5px;
+  margin: 0 0 var(--s-1);
 }
 
 .artifact-list {
@@ -963,16 +1003,12 @@ details.card[open] > summary.card-title::before {
   padding: 0;
 }
 
-.artifact-list li + li {
-  margin-top: 2px;
-}
-
 .artifact-list a {
   align-items: baseline;
   border-radius: var(--r-sm);
   color: var(--text);
   display: flex;
-  gap: 7px;
+  gap: var(--s-2);
   margin: 0 -6px;
   padding: 3px 6px;
   text-decoration: none;
@@ -986,7 +1022,7 @@ details.card[open] > summary.card-title::before {
 
 .artifact-name {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -994,30 +1030,28 @@ details.card[open] > summary.card-title::before {
 
 /* The extension is the fastest way to tell these files apart, so it never gets truncated. */
 .artifact-ext {
-  background: var(--n-100);
-  border-radius: 4px;
-  color: var(--text-tertiary);
+  color: var(--n-400);
   flex-shrink: 0;
   font-size: 10.5px;
-  letter-spacing: 0.03em;
+  letter-spacing: 0.04em;
   margin-left: auto;
-  padding: 1px 5px;
   text-transform: uppercase;
 }
 
-.progress {
-  max-width: 100%;
-}
+/* --- state ------------------------------------------------------------------ */
 
 .progress-line {
+  color: var(--text-secondary);
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
 .progress-track {
   background: var(--n-150);
   border-radius: 999px;
-  height: 6px;
-  margin-top: 8px;
+  height: 5px;
+  margin-top: var(--s-2);
+  max-width: 460px;
   overflow: hidden;
 }
 
@@ -1037,20 +1071,66 @@ details.card[open] > summary.card-title::before {
   width: 6px;
 }
 
-/* Terminal output on a terminal surface: the colours AISBench emits are legible here, and
-   a long log stops competing with the page around it. */
-/* Closed it is one more card; opened it becomes the terminal it is showing. */
+.banner {
+  background: var(--n-50);
+  border-radius: var(--r-md);
+  margin: 0;
+  padding: 10px 13px;
+}
+
+.banner-danger {
+  background: var(--danger-weak);
+  color: var(--danger);
+}
+
+/* --- the log ---------------------------------------------------------------- */
+
+/* The one framed thing on the page, because it really is a separate surface: a terminal. */
+.card-log {
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--s-3) var(--s-4);
+}
+
+.card-log > summary {
+  align-items: center;
+  color: var(--n-500);
+  cursor: pointer;
+  display: flex;
+  font-size: 11px;
+  font-weight: 600;
+  gap: var(--s-2);
+  letter-spacing: 0.07em;
+  list-style: none;
+  text-transform: uppercase;
+}
+
+.card-log > summary::-webkit-details-marker {
+  display: none;
+}
+
+.card-log > summary::before {
+  border-color: transparent transparent transparent currentcolor;
+  border-style: solid;
+  border-width: 4px 0 4px 5px;
+  content: "";
+  display: inline-block;
+  transition: transform 140ms ease;
+}
+
 .card-log[open] {
   background: var(--n-900);
   border-color: var(--n-900);
+  padding-bottom: var(--s-4);
 }
 
-.card-log[open] > summary.card-title {
+.card-log[open] > summary {
   color: var(--n-400);
+  margin-bottom: var(--s-3);
 }
 
-.card-log[open] > summary.card-title:hover {
-  color: var(--n-200);
+.card-log[open] > summary::before {
+  transform: rotate(90deg);
 }
 
 .log-view {
@@ -1059,7 +1139,7 @@ details.card[open] > summary.card-title::before {
   font-size: 12.5px;
   line-height: 1.65;
   margin: 0;
-  max-height: 460px;
+  max-height: 520px;
   overflow: auto;
   tab-size: 2;
   white-space: pre-wrap;
@@ -1074,10 +1154,7 @@ details.card[open] > summary.card-title::before {
   font-weight: 600;
 }
 
-.ansi-dim {
-  color: var(--n-500);
-}
-
+.ansi-dim,
 .ansi-black {
   color: var(--n-500);
 }
@@ -1110,7 +1187,6 @@ details.card[open] > summary.card-title::before {
   color: var(--n-100);
 }
 
-/* A wide table scrolls inside its own card rather than widening the page. */
 .table-scroll {
   overflow-x: auto;
 }
@@ -1203,7 +1279,7 @@ details.card[open] > summary.card-title::before {
   color: var(--text);
   font-size: 13px;
   font-weight: 600;
-  margin: 0 0 4px;
+  margin: 0 0 var(--s-1);
 }
 
 .param-group > .field-hint {

@@ -7,6 +7,7 @@ import { useAuth } from "../auth/auth-context";
 import { useI18n } from "../i18n/i18n-context";
 import type { MessageKey } from "../i18n/messages";
 import { PageHeader } from "../components/page-header";
+import { StateBadge } from "../components/status";
 
 const POLL_MS = 1500;
 const ALL = "";
@@ -23,6 +24,16 @@ const DOMAIN_LABELS: Record<string, MessageKey> = {
   other: "datasets.categoryOther",
 };
 const DOMAIN_ORDER = ["llm", "multimodal", "dialogue", "synthetic", "custom", "other"];
+
+// Installed, arriving, broken, or not here yet: the states a job has, read the same way.
+const STATUS_TONES: Record<Dataset["status"], string> = {
+  available: "success",
+  // Found on disk without this service putting it there: present, but not by our doing.
+  detected: "neutral",
+  installing: "active",
+  failed: "danger",
+  not_installed: "neutral",
+};
 
 const STATUS_LABELS: Record<Dataset["status"], MessageKey> = {
   not_installed: "datasets.notInstalled",
@@ -230,7 +241,11 @@ export function DatasetsPage() {
                   )}
                 </td>
                 <td className="mono">{dataset.config_name}</td>
-                <td>{t(STATUS_LABELS[status])}</td>
+                <td>
+                  <StateBadge tone={STATUS_TONES[status]}>
+                    {t(STATUS_LABELS[status])}
+                  </StateBadge>
+                </td>
                 <td className="align-right">
                   {/* Shared datasets are never deletable from the web UI. */}
                   {dataset.can_install && status === "not_installed" && (

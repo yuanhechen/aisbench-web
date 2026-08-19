@@ -71,13 +71,26 @@ function formatMoment(value: string, locale: string): string {
       });
 }
 
-function Row({ label, children }: { label: string; children: ReactNode }) {
+function Row({
+  label,
+  wide = false,
+  children,
+}: {
+  label: string;
+  wide?: boolean;
+  children: ReactNode;
+}) {
   return (
-    <div className="info-row">
-      <dt>{label}</dt>
-      <dd>{children}</dd>
-    </div>
+    <>
+      <dt className={wide ? "info-wide" : ""}>{label}</dt>
+      <dd className={wide ? "info-wide" : ""}>{children}</dd>
+    </>
   );
+}
+
+/** Where one kind of fact ends and the next begins. */
+function Break() {
+  return <div className="info-break" />;
 }
 
 /**
@@ -98,11 +111,12 @@ export function RunConfiguration({ job, elapsed }: { job: Job; elapsed: string |
   const cli = cliWords(asRecord(parameters.cli));
 
   return (
-    <dl className="info-list">
+    <dl className="info-grid">
       {elapsed !== null && <Row label={t("jobDetail.elapsed")}>{elapsed}</Row>}
       {job.finished_at !== null && (
         <Row label={t("jobDetail.finishedAt")}>{formatMoment(job.finished_at, locale)}</Row>
       )}
+      <Break />
       <Row label={t("newJob.dataset")}>{job.dataset.name}</Row>
       {job.dataset.config_name !== "" && (
         <Row label={t("newJob.config")}>
@@ -118,20 +132,21 @@ export function RunConfiguration({ job, elapsed }: { job: Job; elapsed: string |
           <span className="mono">{job.model.config_name}</span>
         </Row>
       )}
+      <Break />
       {legacy !== null ? (
-        <Row label={t("jobDetail.storedParameters")}>
+        <Row label={t("jobDetail.storedParameters")} wide>
           <span className="mono">{pairs(legacy)}</span>
         </Row>
       ) : (
         <>
-          <Row label={t("jobDetail.changedFields")}>
+          <Row label={t("jobDetail.changedFields")} wide>
             {Object.keys(changed).length === 0 ? (
               <span className="info-muted">{t("jobDetail.allDefaults")}</span>
             ) : (
               <span className="mono">{pairs(changed)}</span>
             )}
           </Row>
-          <Row label={t("newJob.groupCli")}>
+          <Row label={t("newJob.groupCli")} wide>
             {cli.length === 0 ? (
               <span className="info-muted">{t("jobDetail.allDefaults")}</span>
             ) : (

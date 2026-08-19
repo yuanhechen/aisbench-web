@@ -15,6 +15,8 @@ import {
   Routes,
 } from "react-router-dom";
 
+import type { Job } from "./api/types";
+import { useApiQuery } from "./api/use-query";
 import { AuthProvider, useAuth } from "./auth/auth-context";
 import type { CurrentUser } from "./auth/auth-context";
 import { I18nProvider, useI18n } from "./i18n/i18n-context";
@@ -86,9 +88,19 @@ function AppContent({ recentJobs }: { recentJobs: RecentJob[] }) {
   return <Shell user={user} recentJobs={recentJobs} />;
 }
 
+// Enough to get back to what you were just looking at, not a second jobs page.
+const RECENT_SHOWN = 5;
+
 function Shell({ user, recentJobs }: { user: CurrentUser; recentJobs: RecentJob[] }) {
   const { t, toggleLocale } = useI18n();
   const { logout } = useAuth();
+  const jobs = useApiQuery<Job[]>("/api/jobs");
+  const recent =
+    recentJobs.length > 0
+      ? recentJobs
+      : (jobs.data ?? [])
+          .slice(0, RECENT_SHOWN)
+          .map((job) => ({ id: job.id, title: job.name === "" ? job.dataset.name : job.name }));
 
   return (
     <div className="app-shell">
@@ -102,11 +114,11 @@ function Shell({ user, recentJobs }: { user: CurrentUser; recentJobs: RecentJob[
             </NavLink>
           ))}
         </div>
-        {recentJobs.length > 0 && (
+        {recent.length > 0 && (
           <div>
             <div className="sidebar-section-title">{t("nav.recent")}</div>
             <div className="sidebar-recent">
-              {recentJobs.map((job) => (
+              {recent.map((job) => (
                 <NavLink key={job.id} className="sidebar-recent-item" to={`/jobs/${job.id}`}>
                   {job.title}
                 </NavLink>

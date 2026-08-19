@@ -4,9 +4,9 @@ import { api } from "../api/client";
 import type { Job } from "../api/types";
 import { useApiQuery } from "../api/use-query";
 import { useAuth } from "../auth/auth-context";
-import { JobArtifacts, JobMetrics } from "../components/job-results";
+import { JobResult } from "../components/job-result";
+import { JobArtifacts } from "../components/job-results";
 import type { Artifact } from "../components/job-results";
-import { JobSummary } from "../components/job-summary";
 import { LogView } from "../components/log-view";
 import { RunConfiguration } from "../components/run-configuration";
 import { ACTIVE_STATUSES, StatusLabel } from "../components/status";
@@ -140,7 +140,6 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   }
 
   const cancellable = active;
-  const failed = job.status === "failed" || job.status === "cancelled";
   const elapsed = durationBetween(job.started_at, job.finished_at);
 
   return (
@@ -210,7 +209,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
 
           {/* A finished job has no progress left to report; the status badge already said so. */}
           {active && job.progress !== null && (
-            <section className="card">
+            <section>
               <div className="progress">
                 <div className="progress-line">
                   {t("jobDetail.progress")} {job.progress.completed} / {job.progress.total}
@@ -235,15 +234,17 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
           )}
 
           {job.status === "succeeded" && (
-            <>
-              <JobMetrics jobId={jobId} datasetName={job.dataset.name} />
-              <JobSummary jobId={jobId} artifacts={artifacts.data ?? []} />
-            </>
+            <JobResult
+              jobId={jobId}
+              artifacts={artifacts.data ?? []}
+              datasetName={job.dataset.name}
+            />
           )}
 
-          {/* Open when the log is the answer: while it runs, and after it goes wrong. */}
-          <details className="card card-log" open={active || failed}>
-            <summary className="card-title">
+          {/* Open by default in every state. It is where the run says what it actually
+              did, and its own scroll caps how much of the page it can take. */}
+          <details className="card-log" open>
+            <summary>
               {t("jobDetail.log")}
               {active && <span className="live-dot" aria-label={t("jobDetail.live")} />}
             </summary>
@@ -252,8 +253,8 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
         </div>
 
         <aside className="task-rail">
-          <section className="card">
-            <h2 className="card-title">{t("jobDetail.runInfo")}</h2>
+          <section className="rail-section">
+            <h2 className="eyebrow">{t("jobDetail.runInfo")}</h2>
             <RunConfiguration job={job} elapsed={elapsed} />
           </section>
           {job.status === "succeeded" && (

@@ -37,3 +37,8 @@ export function StatusLabel({ status }: { status: string }) {
     </span>
   );
 }
+
+/** A dataset is present, arriving, broken, or not here yet — the same four states. */
+export function StateBadge({ tone, children }: { tone: string; children: string }) {
+  return <span className={`status status-${tone}`}>{children}</span>;
+}
