@@ -42,42 +42,32 @@ FLAG_CLI_OPTIONS = (
     ("pressure", "--pressure"),
     ("spec_decode", "--spec-decode"),
 )
-# Sampling options are merged straight into the OpenAI request body by the model class.
-GENERATION_OPTIONS = (
-    "temperature",
-    "top_p",
-    "top_k",
-    "seed",
-    "repetition_penalty",
-    "ignore_eos",
-)
-
-
 def cli_arguments_for(parameters: dict) -> list[str]:
     """Options AISBench reads from its own command line rather than from the config."""
+    cli = parameters.get("cli") if "cli" in parameters else parameters
     arguments: list[str] = [
         "--max-num-workers",
-        str(int(parameters.get("max_num_workers") or DEFAULT_MAX_NUM_WORKERS)),
+        str(int(cli.get("max_num_workers") or DEFAULT_MAX_NUM_WORKERS)),
     ]
     for key, option in COUNTED_CLI_OPTIONS:
         if key == "max_num_workers":
             continue
-        value = parameters.get(key)
+        value = cli.get(key)
         if value is not None:
             arguments += [option, str(int(value))]
     for key, option in FLAG_CLI_OPTIONS:
-        if parameters.get(key):
+        if cli.get(key):
             arguments.append(option)
     return arguments
 
 
-def _generation_kwargs(parameters: dict) -> dict:
-    """Only the sampling options the user actually set; the rest stay at AISBench's defaults."""
-    return {
-        key: parameters[key]
-        for key in GENERATION_OPTIONS
-        if parameters.get(key) is not None
-    }
+def _rendered_fields(values: dict) -> list[str]:
+    """Render config fields, refusing any name that is not a plain identifier."""
+    lines = []
+    for name in sorted(values):
+        _checked_import(name, pattern=IDENTIFIER, label="field")
+        lines.append(f"    {name}={values[name]!r},")
+    return lines
 
 
 @dataclass(frozen=True)
@@ -86,7 +76,6 @@ class EndpointSnapshot:
     base_url: str
     model_name: str
     api_key: str | None
-    max_output_length: int
 
 
 def cli_mode_for(mode: str, parameters: dict) -> str:
@@ -128,6 +117,11 @@ def render_config(
     model_import: str | None = None,
     redact_api_key: bool = False,
 ) -> str:
+    """Render the job config.
+
+    `parameters` separates what the CLI takes from what the model config file holds, because
+    those are different things in AISBench and editing one is not editing the other.
+    """
     if mode not in MODEL_IMPORTS:
         raise ValueError(f"unknown job mode: {mode!r}")
     dataset_import = _checked_import(dataset_import, pattern=DOTTED_PATH, label="module")
@@ -157,21 +151,19 @@ def render_config(
         f"    host_port={parsed.port or (443 if parsed.scheme == 'https' else 80)!r},",
         f"    url={service_url!r},",
         f"    enable_ssl={(parsed.scheme == 'https')!r},",
-        f"    max_out_len={endpoint.max_output_length!r},",
-        f"    request_rate={parameters.get('request_rate') or 0!r},",
     ]
-    # The chosen model config already states whether it streams; overwriting that would make
-    # the choice between two configs of the same class produce identical files.
-    if model_import is None:
-        lines.append(f"    stream={mode == PERFORMANCE!r},")
-    if parameters.get("batch_size") is not None:
-        lines.append(f"    batch_size={int(parameters['batch_size'])!r},")
-    if parameters.get("retry") is not None:
-        lines.append(f"    retry={int(parameters['retry'])!r},")
-    generation = _generation_kwargs(parameters)
+    # Only fields the user actually changed. Anything untouched keeps whatever the chosen
+    # model config file already says, which is the file they would have edited by hand.
+    lines += _rendered_fields(parameters.get("config_fields") or {})
+    generation = parameters.get("generation_kwargs") or {}
     if generation:
+        for name in generation:
+            _checked_import(name, pattern=IDENTIFIER, label="field")
         rendered = ", ".join(f"{key}={value!r}" for key, value in sorted(generation.items()))
         lines.append(f"    generation_kwargs=dict({rendered}),")
+    # Without a chosen config the mode picks the default one, which decides streaming.
+    if model_import is None and "stream" not in (parameters.get("config_fields") or {}):
+        lines.append(f"    stream={mode == PERFORMANCE!r},")
     lines += [")", ""]
     # num_prompts is not written here: AISBench's own --num-prompts sets exactly this
     # dataset reader range, and the CLI is the documented way to ask for it.

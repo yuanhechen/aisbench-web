@@ -4,7 +4,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, status
 from fastapi.websockets import WebSocketDisconnect
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aisbench_web.datasets.catalog import CatalogEntry, load_catalog, load_model_configs
 from aisbench_web.dependencies import get_current_user, get_user_repository
@@ -21,47 +21,55 @@ router = APIRouter()
 
 LOG_CHUNK_LIMIT = 256 * 1024
 JOB_NOT_FOUND = "job not found"
-DEFAULT_MAX_OUTPUT_LENGTH = 512
 JOB_NAME_MAX_LENGTH = 200
 ACCURACY = "accuracy"
 PERFORMANCE = "performance"
 
 
-class CommonParameters(BaseModel):
-    """Options every mode accepts, named as AISBench names them."""
+class CommonCliOptions(BaseModel):
+    """Arguments AISBench reads from its own command line, in every mode.
+
+    These are a different thing from the model config's fields: the command line drives the
+    run, the config file describes the endpoint. Mixing them is what made the old form
+    offer settings that never reached anything.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     num_prompts: int | None = Field(default=None, ge=1, le=1_000_000)
     max_num_workers: int = Field(default=1, ge=1, le=128)
     max_workers_per_gpu: int | None = Field(default=None, ge=1, le=128)
     num_warmups: int | None = Field(default=None, ge=0, le=1000)
-    max_output_length: int | None = Field(default=None, ge=1, le=131072)
-    batch_size: int | None = Field(default=None, ge=1, le=4096)
-    retry: int | None = Field(default=None, ge=0, le=20)
-    # Merged straight into the OpenAI request body by the model class.
-    temperature: float | None = Field(default=None, ge=0, le=2)
-    top_p: float | None = Field(default=None, gt=0, le=1)
-    top_k: int | None = Field(default=None, ge=-1, le=1000)
-    seed: int | None = Field(default=None, ge=0)
-    repetition_penalty: float | None = Field(default=None, gt=0, le=10)
-    ignore_eos: bool | None = None
 
 
-class AccuracyParameters(CommonParameters):
+class AccuracyCliOptions(CommonCliOptions):
     dump_eval_details: bool = False
     merge_datasets: bool = False
     dump_extract_rate: bool = False
 
 
-class PerformanceParameters(CommonParameters):
-    request_rate: float | None = Field(default=None, ge=0, le=100_000)
-    stream: bool = True
-    visualization: bool = False
+class PerformanceCliOptions(CommonCliOptions):
     pressure: bool = False
     pressure_time: int | None = Field(default=None, ge=1, le=86400)
     spec_decode: bool = False
 
 
-PARAMETER_MODELS = {ACCURACY: AccuracyParameters, PERFORMANCE: PerformanceParameters}
+CLI_OPTION_MODELS = {ACCURACY: AccuracyCliOptions, PERFORMANCE: PerformanceCliOptions}
+
+#: A model config holds plain values; anything else is not something the file declares.
+FieldValue = bool | int | float | str
+
+
+class JobParameters(BaseModel):
+    """What the user filled in, kept in the two groups AISBench actually has."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    #: Overrides for fields of the chosen model config file, by that file's own names.
+    config_fields: dict[str, FieldValue] = Field(default_factory=dict)
+    #: Overrides for entries of that file's generation_kwargs.
+    generation_kwargs: dict[str, FieldValue] = Field(default_factory=dict)
+    cli: dict[str, Any] = Field(default_factory=dict)
 
 
 class JobCreate(BaseModel):
@@ -74,6 +82,27 @@ class JobCreate(BaseModel):
     #: Which AISBench model config drives the endpoint; the mode's default when omitted.
     model_config_name: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+def _reject_fields_the_config_does_not_have(model_config, parameters: dict) -> None:
+    """A field the chosen file does not declare would be written into the config regardless,
+    where AISBench would either ignore it or fail. Name it here instead."""
+    if model_config is None:
+        return
+    for key, declared in (
+        ("config_fields", {field.name for field in model_config.fields}),
+        ("generation_kwargs", {field.name for field in model_config.generation_fields}),
+    ):
+        unknown = sorted(set(parameters.get(key) or {}) - declared)
+        if unknown:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"model config {model_config.name!r} has no "
+                    f"{'generation_kwargs entry' if key == 'generation_kwargs' else 'field'} "
+                    f"named {unknown[0]!r}"
+                ),
+            )
 
 
 class ModelDisplay(BaseModel):
@@ -184,7 +213,9 @@ def create_job(
 ) -> JobResponse:
     """Ownership comes from the session; the request body cannot name an owner."""
     try:
-        parameters = PARAMETER_MODELS[payload.mode](**payload.parameters).model_dump()
+        requested = JobParameters(**payload.parameters)
+        parameters = requested.model_dump()
+        parameters["cli"] = CLI_OPTION_MODELS[payload.mode](**requested.cli).model_dump()
     except ValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -248,6 +279,8 @@ def create_job(
                 ),
             )
 
+    _reject_fields_the_config_does_not_have(model_config, parameters)
+
     encrypted = endpoints.get_encrypted_api_key_for_owner(user.id, endpoint.id)
     job = repository.create(
         owner_id=user.id,
@@ -262,7 +295,6 @@ def create_job(
             "name": endpoint.name,
             "base_url": endpoint.base_url,
             "model_name": endpoint.model_name,
-            "max_output_length": parameters.get("max_output_length") or DEFAULT_MAX_OUTPUT_LENGTH,
             "config_name": "" if model_config is None else model_config.name,
             "config_import": "" if model_config is None else model_config.import_path,
             "encrypted_api_key": None if encrypted is None else encrypted.decode("utf-8"),

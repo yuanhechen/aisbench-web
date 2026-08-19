@@ -556,3 +556,74 @@ def test_only_a_config_declaring_service_drives_an_endpoint(tmp_path: Path) -> N
         "declares_local",
         "declares_nothing",
     }
+
+
+def test_model_config_fields_come_from_the_file_not_from_a_fixed_list() -> None:
+    """The CLI workflow is editing the chosen config file, so its own fields are the ones a
+    job can change. The seven API configs AISBench ships do not agree on that list."""
+    source = """
+from ais_bench.benchmark.models import VLLMCustomAPIChat
+
+models = [
+    dict(
+        attr="service",
+        type=VLLMCustomAPIChat,
+        abbr="vllm-api-stream-chat",
+        path="",
+        model="",
+        stream=True,
+        request_rate=0,
+        retry=2,
+        api_key="",
+        host_ip="localhost",
+        host_port=8080,
+        url="",
+        max_out_len=512,
+        batch_size=1,
+        trust_remote_code=False,
+        generation_kwargs=dict(temperature=0.01, ignore_eos=False),
+        pred_postprocessor=dict(type=extract_non_reasoning_content),
+    )
+]
+"""
+
+    from aisbench_web.datasets.scan import read_model_config_fields
+
+    fields, generation = read_model_config_fields(source)
+
+    # Declaration order, so the form reads like the file.
+    assert [field.name for field in fields] == [
+        "stream",
+        "request_rate",
+        "retry",
+        "max_out_len",
+        "batch_size",
+        "trust_remote_code",
+    ]
+    assert [(field.name, field.default) for field in generation] == [
+        ("temperature", 0.01),
+        ("ignore_eos", False),
+    ]
+    assert {field.name: field.kind for field in fields}["stream"] == "boolean"
+    assert {field.name: field.kind for field in fields}["max_out_len"] == "integer"
+
+
+def test_fields_the_endpoint_supplies_are_not_asked_for_again() -> None:
+    """The address and key come from the configured model endpoint, so a job never fills
+    them in; `type` and `abbr` are not settings at all."""
+    source = """
+models = [dict(attr="service", type=Cls, abbr="a", path="", model="", model_name="",
+               api_key="", host_ip="localhost", host_port=8080, url="", batch_size=1)]
+"""
+
+    from aisbench_web.datasets.scan import read_model_config_fields
+
+    fields, _ = read_model_config_fields(source)
+
+    assert [field.name for field in fields] == ["batch_size"]
+
+
+def test_a_config_without_a_models_list_offers_nothing() -> None:
+    from aisbench_web.datasets.scan import read_model_config_fields
+
+    assert read_model_config_fields("x = 1\n") == ((), ())

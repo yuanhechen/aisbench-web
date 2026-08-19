@@ -60,9 +60,20 @@ export interface Job {
   finished_at: string | null;
 }
 
+export interface ConfigField {
+  name: string;
+  default: boolean | number | string;
+  kind: "boolean" | "integer" | "number" | "text";
+}
+
 export interface ModelConfigOption {
   name: string;
   family: string;
   class_name: string;
   stream: boolean;
+  /** The mode that falls back to this config when the user picks none. */
+  default_for: "accuracy" | "performance" | null;
+  /** What this config file lets a job change. Config files differ, so this list differs. */
+  fields: ConfigField[];
+  generation_fields: ConfigField[];
 }

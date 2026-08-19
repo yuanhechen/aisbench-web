@@ -23,7 +23,7 @@ MODEL_LISTING = {"data": [{"id": "Qwen3-32B"}]}
 ACCURACY_JOB = {
     "dataset_id": "gsm8k",
     "mode": "accuracy",
-    "parameters": {"num_prompts": 8, "max_num_workers": 1},
+    "parameters": {"cli": {"num_prompts": 8, "max_num_workers": 1}},
 }
 
 
@@ -135,19 +135,34 @@ async def test_another_users_endpoint_cannot_be_used(client_factory: ClientFacto
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "parameters",
+    "cli",
     [
         {"num_prompts": 0},
         {"num_prompts": 1000001},
         {"max_num_workers": 0},
         {"max_num_workers": 129},
-        {"max_output_length": 0},
+        {"num_warmups": -1},
+        # A performance-only option is not an accuracy option, even though both are CLI flags.
+        {"pressure": True},
     ],
 )
-async def test_out_of_range_accuracy_parameters_are_refused(owner, parameters: dict) -> None:
-    response = await submit(owner, parameters={**ACCURACY_JOB["parameters"], **parameters})
+async def test_out_of_range_accuracy_parameters_are_refused(owner, cli: dict) -> None:
+    response = await submit(owner, parameters={"cli": {**ACCURACY_JOB["parameters"]["cli"], **cli}})
 
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_config_fields_the_chosen_model_config_does_not_have_are_refused(owner) -> None:
+    """The form offers the fields of the selected file; anything else never came from it."""
+    response = await submit(
+        owner,
+        model_config_name="vllm_api_stream_chat",
+        parameters={"config_fields": {"returns_tool_calls": True}},
+    )
+
+    assert response.status_code == 409
+    assert "returns_tool_calls" in response.json()["detail"]
 
 
 @pytest.mark.asyncio
@@ -156,16 +171,14 @@ async def test_performance_parameters_are_validated_separately(owner) -> None:
         owner,
         mode="performance",
         parameters={
-            "num_prompts": 32,
-            "batch_size": 4,
-            "stream": True,
-            "visualization": True,
-            "pressure": True,
-            "pressure_time": 30,
-            "temperature": 0.7,
+            "cli": {"num_prompts": 32, "pressure": True, "pressure_time": 30},
+            "config_fields": {"batch_size": 4},
+            "generation_kwargs": {"temperature": 0.7},
         },
     )
-    bad = await submit(owner, mode="performance", parameters={"num_prompts": 32, "pressure_time": 0})
+    bad = await submit(
+        owner, mode="performance", parameters={"cli": {"num_prompts": 32, "pressure_time": 0}}
+    )
 
     assert good.status_code == 201
     assert bad.status_code == 422

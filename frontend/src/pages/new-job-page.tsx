@@ -3,7 +3,7 @@ import { useNavigate } from "react-router-dom";
 import type { FormEvent } from "react";
 
 import { api } from "../api/client";
-import type { Dataset, Job, ModelConfigOption, ModelEndpoint } from "../api/types";
+import type { ConfigField, Dataset, Job, ModelConfigOption, ModelEndpoint } from "../api/types";
 import { useApiQuery } from "../api/use-query";
 import { useAuth } from "../auth/auth-context";
 import { useI18n } from "../i18n/i18n-context";
@@ -22,25 +22,19 @@ interface FormState {
   maxNumWorkers: string;
   maxWorkersPerGpu: string;
   numWarmups: string;
-  maxOutputLength: string;
-  batchSize: string;
-  retry: string;
-  temperature: string;
-  topP: string;
-  topK: string;
-  seed: string;
-  repetitionPenalty: string;
   // accuracy
   dumpEvalDetails: boolean;
   mergeDatasets: boolean;
   dumpExtractRate: boolean;
   // performance
-  requestRate: string;
   visualization: boolean;
   pressure: boolean;
   pressureTime: string;
   specDecode: boolean;
 }
+
+/** Fields the user changed, by the name the chosen config file gives them. */
+type Overrides = Record<string, boolean | string>;
 
 const INITIAL: FormState = {
   name: "",
@@ -53,18 +47,9 @@ const INITIAL: FormState = {
   maxNumWorkers: "1",
   maxWorkersPerGpu: "",
   numWarmups: "",
-  maxOutputLength: "512",
-  batchSize: "",
-  retry: "",
-  temperature: "",
-  topP: "",
-  topK: "",
-  seed: "",
-  repetitionPenalty: "",
   dumpEvalDetails: false,
   mergeDatasets: false,
   dumpExtractRate: false,
-  requestRate: "",
   visualization: false,
   pressure: false,
   pressureTime: "",
@@ -76,6 +61,32 @@ function optionalNumber(value: string): number | undefined {
   return value.trim() === "" || Number.isNaN(parsed) ? undefined : parsed;
 }
 
+/**
+ * The values the user actually changed, typed as the config file types them.
+ *
+ * A blank input means "leave the file alone", which is what not editing the file by hand
+ * would have done; a checkbox has no blank, so it counts only when it differs.
+ */
+function changedFields(fields: ConfigField[], overrides: Overrides): Record<string, unknown> {
+  const changed: Record<string, unknown> = {};
+  for (const field of fields) {
+    const value = overrides[field.name];
+    if (value === undefined) continue;
+    if (field.kind === "boolean") {
+      if (value !== field.default) changed[field.name] = value;
+      continue;
+    }
+    if (typeof value !== "string" || value.trim() === "") continue;
+    if (field.kind === "text") {
+      if (value !== field.default) changed[field.name] = value;
+      continue;
+    }
+    const parsed = Number(value);
+    if (!Number.isNaN(parsed) && parsed !== field.default) changed[field.name] = parsed;
+  }
+  return changed;
+}
+
 export function NewJobPage() {
   const { t } = useI18n();
   const { reportFailure } = useAuth();
@@ -85,6 +96,7 @@ export function NewJobPage() {
     onFailure: reportFailure,
   });
   const [form, setForm] = useState<FormState>(INITIAL);
+  const [overrides, setOverrides] = useState<Overrides>({});
   const [queued, setQueued] = useState<Job | null>(null);
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
@@ -110,6 +122,15 @@ export function NewJobPage() {
     [modelConfigs.data],
   );
 
+  // The fields a job can change are the ones this file declares. They differ between files:
+  // one has returns_tool_calls, another has do_sample, several have no api_key at all.
+  // Picking none is not picking nothing: AISBench still runs a config, the one this mode
+  // defaults to, so its fields are the ones to show.
+  const selectedModelConfig =
+    sortedModelConfigs.find((config) => config.name === form.modelConfigName) ??
+    sortedModelConfigs.find((config) => config.default_for === form.mode) ??
+    null;
+
   const modeUnsupported = selectedDataset !== null && availableConfigs.length === 0;
   const selectedConfig =
     availableConfigs.find((config) => config.name === form.configName) ??
@@ -128,24 +149,27 @@ export function NewJobPage() {
       }
       return next;
     });
+    // Field names belong to one config file; another file may not have them at all, and
+    // switching mode switches which file the default resolves to.
+    if (field === "modelConfigName" || field === "mode") {
+      setOverrides({});
+    }
+    setQueued(null);
+  }
+
+  function overrideField(name: string, value: boolean | string) {
+    setOverrides((current) => ({ ...current, [name]: value }));
     setQueued(null);
   }
 
   function parameters(): Record<string, unknown> {
-    // Only what the user actually set; anything blank stays at AISBench's own default.
+    // Two groups, because AISBench has two: the config file describes the endpoint, the
+    // command line drives the run. Only what the user set travels.
     const common = {
       num_prompts: optionalNumber(form.numPrompts),
       max_num_workers: optionalNumber(form.maxNumWorkers),
       max_workers_per_gpu: optionalNumber(form.maxWorkersPerGpu),
       num_warmups: optionalNumber(form.numWarmups),
-      max_output_length: optionalNumber(form.maxOutputLength),
-      batch_size: optionalNumber(form.batchSize),
-      retry: optionalNumber(form.retry),
-      temperature: optionalNumber(form.temperature),
-      top_p: optionalNumber(form.topP),
-      top_k: optionalNumber(form.topK),
-      seed: optionalNumber(form.seed),
-      repetition_penalty: optionalNumber(form.repetitionPenalty),
     };
     const specific =
       form.mode === "accuracy"
@@ -155,15 +179,18 @@ export function NewJobPage() {
             dump_extract_rate: form.dumpExtractRate,
           }
         : {
-            request_rate: optionalNumber(form.requestRate),
             visualization: form.visualization,
             pressure: form.pressure,
             pressure_time: optionalNumber(form.pressureTime),
             spec_decode: form.specDecode,
           };
-    return Object.fromEntries(
-      Object.entries({ ...common, ...specific }).filter(([, value]) => value !== undefined),
-    );
+    return {
+      cli: Object.fromEntries(
+        Object.entries({ ...common, ...specific }).filter(([, value]) => value !== undefined),
+      ),
+      config_fields: changedFields(selectedModelConfig?.fields ?? [], overrides),
+      generation_kwargs: changedFields(selectedModelConfig?.generation_fields ?? [], overrides),
+    };
   }
 
   async function handleSubmit(event: FormEvent) {
@@ -320,63 +347,45 @@ export function NewJobPage() {
       <section className="form-step">
         <h2 className="form-step-title">{t("newJob.stepParameters")}</h2>
 
+        <div className="param-group">
         <p className="group-title">{t("newJob.groupModelConfig")}</p>
-        <div className="field-grid">
-          <NumberField
-            id="job-max-output"
-            label="max_out_len"
-            value={form.maxOutputLength}
-            onChange={(value) => update("maxOutputLength", value)}
-          />
-          <NumberField
-            id="job-batch-size"
-            label="batch_size"
-            hint={t("newJob.batchSizeHint")}
-            value={form.batchSize}
-            onChange={(value) => update("batchSize", value)}
-          />
-          <NumberField
-            id="job-retry"
-            label="retry"
-            value={form.retry}
-            onChange={(value) => update("retry", value)}
-          />
-          {form.mode === "performance" && (
-            <NumberField
-              id="job-request-rate"
-              label="request_rate"
-              hint={t("newJob.requestRateHint")}
-              value={form.requestRate}
-              onChange={(value) => update("requestRate", value)}
+        {selectedModelConfig === null ? (
+          <p className="field-hint">{t("newJob.pickConfigFirst")}</p>
+        ) : (
+          <>
+            <p className="field-hint">
+              {t("newJob.configFieldsHint")}
+              <span className="mono"> {selectedModelConfig.name}.py</span>
+            </p>
+            <ConfigFields
+              fields={selectedModelConfig.fields}
+              overrides={overrides}
+              hintFor={(name) =>
+                name in FIELD_HINTS
+                  ? t(FIELD_HINTS[name as keyof typeof FIELD_HINTS])
+                  : undefined
+              }
+              onChange={overrideField}
             />
-          )}
+            {selectedModelConfig.generation_fields.length > 0 && (
+              <details className="advanced">
+                <summary>generation_kwargs</summary>
+                <p className="field-hint">{t("newJob.samplingHint")}</p>
+                <ConfigFields
+                  fields={selectedModelConfig.generation_fields}
+                  overrides={overrides}
+                  onChange={overrideField}
+                />
+              </details>
+            )}
+          </>
+        )}
+
         </div>
 
-        <details className="advanced">
-          <summary>generation_kwargs</summary>
-          <p className="field-hint">{t("newJob.samplingHint")}</p>
-          <div className="field-grid">
-            {(
-              [
-                ["job-temperature", "temperature", "temperature"],
-                ["job-top-p", "top_p", "topP"],
-                ["job-top-k", "top_k", "topK"],
-                ["job-seed", "seed", "seed"],
-                ["job-repetition-penalty", "repetition_penalty", "repetitionPenalty"],
-              ] as const
-            ).map(([id, label, field]) => (
-              <NumberField
-                key={id}
-                id={id}
-                label={label}
-                value={form[field]}
-                onChange={(value) => update(field, value)}
-              />
-            ))}
-          </div>
-        </details>
-
+        <div className="param-group">
         <p className="group-title">{t("newJob.groupCli")}</p>
+        <p className="field-hint">{t("newJob.cliHint")}</p>
         <div className="field-grid">
           <NumberField
             id="job-num-prompts"
@@ -398,14 +407,14 @@ export function NewJobPage() {
             value={form.maxWorkersPerGpu}
             onChange={(value) => update("maxWorkersPerGpu", value)}
           />
+          <NumberField
+            id="job-warmups"
+            label="--num-warmups"
+            value={form.numWarmups}
+            onChange={(value) => update("numWarmups", value)}
+          />
           {form.mode === "performance" && (
             <>
-              <NumberField
-                id="job-warmups"
-                label="--num-warmups"
-                value={form.numWarmups}
-                onChange={(value) => update("numWarmups", value)}
-              />
               {form.pressure && (
                 <NumberField
                   id="job-pressure-time"
@@ -456,6 +465,7 @@ export function NewJobPage() {
             />
           </>
         )}
+        </div>
       </section>
 
       <section className="form-step">
@@ -501,6 +511,112 @@ function describeEndpoint(model: ModelEndpoint): string {
     return model.name;
   }
   return `${model.name} · ${served}`;
+}
+
+// A few fields do something the name alone does not say. Everything else is left to speak
+// for itself: the name in the file is the name AISBench uses.
+const FIELD_HINTS = {
+  batch_size: "newJob.batchSizeHint",
+  request_rate: "newJob.requestRateHint",
+} as const;
+
+/**
+ * The fields of one config file: boxes first, then the switches.
+ *
+ * A checkbox is a word and a tick, not a labelled box, so sharing a grid with the number
+ * fields left it floating in a cell sized for something else.
+ */
+function ConfigFields({
+  fields,
+  overrides,
+  hintFor,
+  onChange,
+}: {
+  fields: ConfigField[];
+  overrides: Overrides;
+  hintFor?: (name: string) => string | undefined;
+  onChange: (name: string, value: boolean | string) => void;
+}) {
+  const boxes = fields.filter((field) => field.kind !== "boolean");
+  const switches = fields.filter((field) => field.kind === "boolean");
+  return (
+    <>
+      {boxes.length > 0 && (
+        <div className="field-grid">
+          {boxes.map((field) => (
+            <ConfigFieldInput
+              key={field.name}
+              field={field}
+              value={overrides[field.name]}
+              hint={hintFor?.(field.name)}
+              onChange={(value) => onChange(field.name, value)}
+            />
+          ))}
+        </div>
+      )}
+      {switches.map((field) => (
+        <ConfigFieldInput
+          key={field.name}
+          field={field}
+          value={overrides[field.name]}
+          hint={hintFor?.(field.name)}
+          onChange={(value) => onChange(field.name, value)}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * One field of the chosen model config, typed and defaulted as that file has it.
+ *
+ * The default is the placeholder rather than the value, so an untouched field leaves the
+ * file's own setting alone — the same as not editing that line by hand.
+ */
+function ConfigFieldInput({
+  field,
+  value,
+  hint,
+  onChange,
+}: {
+  field: ConfigField;
+  value: boolean | string | undefined;
+  hint?: string;
+  onChange: (value: boolean | string) => void;
+}) {
+  const id = `job-field-${field.name}`;
+  if (field.kind === "boolean") {
+    const checked = typeof value === "boolean" ? value : field.default === true;
+    return (
+      <label className="checkbox-option" htmlFor={id}>
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span className="mono">{field.name}</span>
+        {hint !== undefined && <span className="field-hint">{hint}</span>}
+      </label>
+    );
+  }
+  return (
+    <div>
+      <label className="field mono" htmlFor={id}>
+        {field.name}
+      </label>
+      <input
+        id={id}
+        className="input"
+        type={field.kind === "text" ? "text" : "number"}
+        step={field.kind === "number" ? "any" : undefined}
+        placeholder={String(field.default)}
+        value={typeof value === "string" ? value : ""}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {hint !== undefined && <p className="field-hint">{hint}</p>}
+    </div>
+  );
 }
 
 function CheckboxField({

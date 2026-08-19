@@ -270,7 +270,6 @@ class Worker:
             base_url=snapshot["base_url"],
             model_name=snapshot["model_name"],
             api_key=api_key,
-            max_output_length=snapshot.get("max_output_length", 512),
         )
 
     @staticmethod

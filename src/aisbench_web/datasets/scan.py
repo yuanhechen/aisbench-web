@@ -5,6 +5,7 @@ configs that ship with the installed version are the authority on which datasets
 variants each one offers, and where its data must live.
 """
 
+import ast
 import re
 from dataclasses import dataclass
 from pathlib import Path
@@ -160,6 +161,21 @@ MODEL_STREAM = re.compile(r"stream\s*=\s*(True|False)")
 # `attr` is AISBench's own discriminator: every family declares "service" or "local", and
 # hf_model.py spells the choice out in a comment. Only a service config drives an endpoint.
 SERVICE_ATTR = "service"
+# Fields a job supplies from elsewhere, so asking for them again would be asking twice: the
+# model endpoint carries the address and key, and the rest identify the config itself.
+SUPPLIED_FIELDS = frozenset(
+    {"attr", "type", "abbr", "path", "model", "model_name", "api_key", "host_ip", "host_port", "url"}
+)
+GENERATION_FIELD = "generation_kwargs"
+
+
+@dataclass(frozen=True)
+class ConfigField:
+    """A field of a model config, with the value that file gives it."""
+
+    name: str
+    default: bool | int | float | str
+    kind: str
 
 
 @dataclass(frozen=True)
@@ -172,6 +188,10 @@ class ModelConfig:
     abbr: str
     stream: bool
     is_service: bool
+    #: Editable fields of this file, in the order it declares them.
+    fields: tuple[ConfigField, ...] = ()
+    #: Editable entries of its generation_kwargs.
+    generation_fields: tuple[ConfigField, ...] = ()
 
     @property
     def import_path(self) -> str:
@@ -201,6 +221,7 @@ def scan_model_configs(ais_bench_package: Path) -> tuple[ModelConfig, ...]:
             model_type = MODEL_TYPE.search(source)
             abbr = MODEL_ABBR.search(source)
             stream = MODEL_STREAM.search(source)
+            fields, generation = read_model_config_fields(source)
             found.append(
                 ModelConfig(
                     name=config_file.stem,
@@ -209,6 +230,73 @@ def scan_model_configs(ais_bench_package: Path) -> tuple[ModelConfig, ...]:
                     abbr="" if abbr is None else abbr.group(1),
                     stream=stream is not None and stream.group(1) == "True",
                     is_service=attr is not None and attr.group(1) == SERVICE_ATTR,
+                    fields=fields,
+                    generation_fields=generation,
                 )
             )
     return tuple(found)
+
+
+def _literal_field(name: str, node: ast.expr) -> ConfigField | None:
+    """Read one keyword of a config dict, keeping only values that are plain literals."""
+    try:
+        value = ast.literal_eval(node)
+    except (ValueError, SyntaxError):
+        return None
+    if isinstance(value, bool):
+        return ConfigField(name=name, default=value, kind="boolean")
+    if isinstance(value, int):
+        return ConfigField(name=name, default=value, kind="integer")
+    if isinstance(value, float):
+        return ConfigField(name=name, default=value, kind="number")
+    if isinstance(value, str):
+        return ConfigField(name=name, default=value, kind="text")
+    return None
+
+
+def _model_dict(source: str) -> ast.Call | None:
+    """Find the dict(...) call inside `models = [ ... ]`."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:
+        return None
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Assign):
+            continue
+        if not any(isinstance(t, ast.Name) and t.id == "models" for t in node.targets):
+            continue
+        if isinstance(node.value, ast.List) and node.value.elts:
+            first = node.value.elts[0]
+            if isinstance(first, ast.Call) and getattr(first.func, "id", None) == "dict":
+                return first
+    return None
+
+
+def read_model_config_fields(source: str) -> tuple[tuple[ConfigField, ...], tuple[ConfigField, ...]]:
+    """Return this config's editable fields and its generation_kwargs entries.
+
+    The file is the list of what can be set: config files differ from one another, so a fixed
+    set of inputs would offer fields one config does not have and hide fields it does.
+    """
+    call = _model_dict(source)
+    if call is None:
+        return (), ()
+
+    fields: list[ConfigField] = []
+    generation: list[ConfigField] = []
+    for keyword in call.keywords:
+        if keyword.arg is None or keyword.arg in SUPPLIED_FIELDS:
+            continue
+        if keyword.arg == GENERATION_FIELD:
+            if isinstance(keyword.value, ast.Call):
+                for inner in keyword.value.keywords:
+                    if inner.arg is None:
+                        continue
+                    entry = _literal_field(inner.arg, inner.value)
+                    if entry is not None:
+                        generation.append(entry)
+            continue
+        entry = _literal_field(keyword.arg, keyword.value)
+        if entry is not None:
+            fields.append(entry)
+    return tuple(fields), tuple(generation)

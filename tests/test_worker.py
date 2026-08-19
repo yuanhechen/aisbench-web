@@ -53,7 +53,6 @@ class Harness:
                 "base_url": "http://127.0.0.1:8001/v1",
                 "model_name": "Qwen3-32B",
                 "encrypted_api_key": self.encrypted_api_key,
-                "max_output_length": 512,
             },
             dataset_snapshot={
                 "id": "gsm8k",
@@ -215,13 +214,12 @@ def test_the_worker_passes_the_requested_worker_count_to_the_cli(harness: Harnes
         model_endpoint_id="endpoint-1",
         dataset_id="gsm8k",
         mode="accuracy",
-        parameters={"num_prompts": 8, "max_num_workers": 3},
+        parameters={"cli": {"num_prompts": 8, "max_num_workers": 3}},
         model_snapshot={
             "abbr": "job-model",
             "base_url": "http://127.0.0.1:8001/v1",
             "model_name": "Qwen3-32B",
             "encrypted_api_key": harness.encrypted_api_key,
-            "max_output_length": 512,
         },
         dataset_snapshot={
             "id": "gsm8k",
@@ -233,6 +231,40 @@ def test_the_worker_passes_the_requested_worker_count_to_the_cli(harness: Harnes
     harness.worker.run_pending_once()
 
     assert seen == [["--max-num-workers", "3", "--num-prompts", "8"]]
+
+
+def test_a_changed_config_field_reaches_the_generated_config(harness: Harness) -> None:
+    """Changing a field here has to be the same as editing that line in the config file,
+    which is the command-line workflow this replaces."""
+    job = harness.jobs.create(
+        owner_id=harness.owner,
+        model_endpoint_id="endpoint-1",
+        dataset_id="gsm8k",
+        mode="accuracy",
+        parameters={
+            "config_fields": {"batch_size": 16, "trust_remote_code": True},
+            "generation_kwargs": {"temperature": 0.7},
+            "cli": {"num_prompts": 8},
+        },
+        model_snapshot={
+            "abbr": "job-model",
+            "base_url": "http://127.0.0.1:8001/v1",
+            "model_name": "Qwen3-32B",
+            "encrypted_api_key": harness.encrypted_api_key,
+        },
+        dataset_snapshot={
+            "id": "gsm8k",
+            "config_import": GSM8K_IMPORT,
+            "dataset_symbol": "gsm8k_datasets",
+        },
+    )
+
+    harness.worker.run_pending_once()
+
+    config = harness.config_of(harness.jobs.get_for_owner(job.id, harness.owner))
+    assert "batch_size=16" in config
+    assert "trust_remote_code=True" in config
+    assert "temperature=0.7" in config
 
 
 # --- execution ---------------------------------------------------------------

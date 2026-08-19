@@ -93,9 +93,37 @@ function renderAt(path: string) {
   return render(<App initialUser={ALICE} initialPath={path} />);
 }
 
+// The real config files do not declare the same fields, and neither do these.
 const MODEL_CONFIGS = [
-  { name: "vllm_api_general_chat", family: "vllm_api", class_name: "VLLMCustomAPIChat", stream: false },
-  { name: "vllm_api_stream_chat", family: "vllm_api", class_name: "VLLMCustomAPIChat", stream: true },
+  {
+    name: "vllm_api_general_chat",
+    family: "vllm_api",
+    class_name: "VLLMCustomAPIChat",
+    stream: false,
+    default_for: "accuracy",
+    fields: [
+      { name: "max_out_len", default: 512, kind: "integer" },
+      { name: "batch_size", default: 1, kind: "integer" },
+      { name: "returns_tool_calls", default: false, kind: "boolean" },
+    ],
+    generation_fields: [{ name: "temperature", default: 0.01, kind: "number" }],
+  },
+  {
+    name: "vllm_api_stream_chat",
+    family: "vllm_api",
+    class_name: "VLLMCustomAPIChat",
+    stream: true,
+    default_for: "performance",
+    fields: [
+      { name: "max_out_len", default: 512, kind: "integer" },
+      { name: "batch_size", default: 1, kind: "integer" },
+      { name: "request_rate", default: 0, kind: "integer" },
+    ],
+    generation_fields: [
+      { name: "temperature", default: 0.01, kind: "number" },
+      { name: "ignore_eos", default: false, kind: "boolean" },
+    ],
+  },
 ];
 
 beforeEach(() => {
@@ -132,7 +160,7 @@ describe("new evaluation", () => {
       dataset_id: "gsm8k",
       mode: "performance",
       config_name: "gsm8k_gen_0_shot_cot_str_perf",
-      parameters: { num_prompts: 32 },
+      parameters: { cli: { num_prompts: 32 } },
     });
   });
 
@@ -154,7 +182,7 @@ describe("new evaluation", () => {
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     await waitFor(() => expect(submitted.mode).toBe("accuracy"));
-    expect(submitted.parameters).toMatchObject({ max_num_workers: 4 });
+    expect(submitted.parameters).toMatchObject({ cli: { max_num_workers: 4 } });
   });
 
   it("names a config once, without restating what the name already says", async () => {
@@ -350,23 +378,79 @@ describe("new evaluation", () => {
     await waitFor(() => expect(submitted.name).toBe("夜间基线"));
   });
 
-  it("labels each parameter as AISBench names it, grouped by where it lands", async () => {
+  it("offers exactly the fields of the chosen config file, and no others", async () => {
+    // Editing that file is the CLI workflow this replaces, so the file decides the form.
+    const user = userEvent.setup();
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await user.selectOptions(screen.getByLabelText("模型配置"), "vllm_api_general_chat");
+
+    expect(screen.getByLabelText("max_out_len")).toBeInTheDocument();
+    expect(screen.getByLabelText("returns_tool_calls")).toBeInTheDocument();
+    expect(screen.queryByLabelText("request_rate")).not.toBeInTheDocument();
+
+    // A different file declares different fields.
+    await user.selectOptions(screen.getByLabelText("模型配置"), "vllm_api_stream_chat");
+    expect(screen.getByLabelText("request_rate")).toBeInTheDocument();
+    expect(screen.queryByLabelText("returns_tool_calls")).not.toBeInTheDocument();
+    // batch_size is the concurrency knob, which its name does not say.
+    expect(screen.getByText(/并发请求数/)).toBeInTheDocument();
+  });
+
+  it("never asks again for what the chosen model endpoint already supplies", async () => {
+    const user = userEvent.setup();
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await user.selectOptions(screen.getByLabelText("模型配置"), "vllm_api_stream_chat");
+
+    for (const supplied of ["api_key", "host_ip", "host_port", "url"]) {
+      expect(screen.queryByLabelText(supplied)).not.toBeInTheDocument();
+    }
+  });
+
+  it("keeps the config file's fields apart from the command line arguments", async () => {
     const user = userEvent.setup();
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
     await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
 
-    // Fields of the generated model config.
-    expect(screen.getByLabelText("max_out_len")).toBeInTheDocument();
-    expect(screen.getByLabelText("batch_size")).toBeInTheDocument();
-    // Options AISBench takes on its own command line.
+    // Picking no config still runs one, so its fields show rather than an empty group.
+    expect(screen.getByLabelText("returns_tool_calls")).toBeInTheDocument();
+    expect(screen.getByText("模型配置文件字段")).toBeInTheDocument();
+    expect(screen.getByText("命令行参数")).toBeInTheDocument();
     expect(screen.getByLabelText("--num-prompts")).toBeInTheDocument();
     expect(screen.getByLabelText("--max-num-workers")).toBeInTheDocument();
-    // batch_size is the concurrency knob; --max-num-workers is task-level and does nothing
-    // for a single dataset, so the two must not read as interchangeable.
-    expect(screen.getByText(/并发请求数/)).toBeInTheDocument();
+    // --max-num-workers is task-level and does nothing for a single dataset, so it must not
+    // read as the concurrency knob that batch_size is.
     expect(screen.getByText(/单数据集只切出一个任务/)).toBeInTheDocument();
+  });
+
+  it("sends a config field only when it differs from what the file already says", async () => {
+    const user = userEvent.setup();
+    let submitted: Record<string, Record<string, unknown>> = {};
+    server.use(
+      http.post("/api/jobs", async ({ request }) => {
+        submitted = (await request.json()) as Record<string, Record<string, unknown>>;
+        return HttpResponse.json({ id: "j", status: "queued", queue_position: 1 }, { status: 201 });
+      }),
+    );
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await user.selectOptions(screen.getByLabelText("模型配置"), "vllm_api_stream_chat");
+    await user.type(screen.getByLabelText("batch_size"), "16");
+    await user.type(screen.getByLabelText("temperature"), "0.7");
+    await user.click(screen.getByRole("button", { name: "提交评测" }));
+
+    await waitFor(() => expect(submitted.parameters).toBeDefined());
+    expect(submitted.parameters.config_fields).toEqual({ batch_size: 16 });
+    expect(submitted.parameters.generation_kwargs).toEqual({ temperature: 0.7 });
   });
 
   it("sends only the parameters the user filled in", async () => {
@@ -385,11 +469,11 @@ describe("new evaluation", () => {
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     await waitFor(() => expect(submitted.parameters).toBeDefined());
-    // An untouched box must not send a value; AISBench's own default should stand.
-    expect(submitted.parameters).not.toHaveProperty("temperature");
-    expect(submitted.parameters).not.toHaveProperty("top_p");
-    expect(submitted.parameters).not.toHaveProperty("pressure_time");
-    expect(submitted.parameters).toMatchObject({ num_prompts: 8, max_num_workers: 1 });
+    // An untouched box must not send a value; the file's own value should stand.
+    expect(submitted.parameters.config_fields).toEqual({});
+    expect(submitted.parameters.generation_kwargs).toEqual({});
+    expect(submitted.parameters.cli).not.toHaveProperty("pressure_time");
+    expect(submitted.parameters.cli).toMatchObject({ num_prompts: 8, max_num_workers: 1 });
   });
 
   it("shows the server's refusal instead of pretending the job queued", async () => {

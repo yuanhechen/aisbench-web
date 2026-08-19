@@ -59,19 +59,32 @@ models = [
         type={cls},
         abbr="{abbr}",
         stream={stream},
+        api_key="",
+        host_ip="localhost",
+        host_port=8080,
+        url="",
         max_out_len=512,
         batch_size=1,
-    )
+{extra}    )
 ]
+"""
+
+# The real configs do not all declare the same fields, so neither do these.
+STREAM_FIELDS = """        request_rate=0,
+        retry=2,
+        generation_kwargs=dict(temperature=0.01, ignore_eos=False),
+"""
+TOOL_CALL_FIELDS = """        returns_tool_calls=True,
+        generation_kwargs=dict(temperature=0.01),
 """
 
 # Two API model classes and one offline config, which must never be offered as an endpoint.
 FAKE_MODEL_CONFIGS = {
     "vllm_api": [
-        ("vllm_api_general_chat", "VLLMCustomAPIChat", "service", "False"),
-        ("vllm_api_stream_chat", "VLLMCustomAPIChat", "service", "True"),
+        ("vllm_api_general_chat", "VLLMCustomAPIChat", "service", "False", TOOL_CALL_FIELDS),
+        ("vllm_api_stream_chat", "VLLMCustomAPIChat", "service", "True", STREAM_FIELDS),
     ],
-    "vllm_offline_models": [("vllm_qwen", "VLLM", "offline", "False")],
+    "vllm_offline_models": [("vllm_qwen", "VLLM", "offline", "False", "")],
 }
 
 
@@ -83,9 +96,9 @@ def aisbench_configs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for family, configs in FAKE_MODEL_CONFIGS.items():
         directory = models_root / family
         directory.mkdir(parents=True)
-        for name, cls, attr, stream in configs:
+        for name, cls, attr, stream, extra in configs:
             (directory / f"{name}.py").write_text(
-                MODEL_CONFIG.format(cls=cls, attr=attr, abbr=name, stream=stream),
+                MODEL_CONFIG.format(cls=cls, attr=attr, abbr=name, stream=stream, extra=extra),
                 encoding="utf-8",
             )
     root = package / "benchmark" / "configs" / "datasets"

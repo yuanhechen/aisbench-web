@@ -32,7 +32,6 @@ def endpoint_snapshot(**overrides) -> EndpointSnapshot:
         "base_url": "http://127.0.0.1:8001/v1",
         "model_name": "Qwen3-32B",
         "api_key": "token-with-quote-'",
-        "max_output_length": 512,
     }
     return EndpointSnapshot(**{**defaults, **overrides})
 
@@ -87,7 +86,7 @@ def test_performance_config_uses_perf_dataset_and_stream_flag(tmp_path: Path) ->
         dataset_import=GSM8K_PERFORMANCE_IMPORT,
         dataset_symbol="gsm8k_datasets",
         endpoint=endpoint_snapshot(),
-        parameters={"num_prompts": 32, "stream": True, "request_rate": 8},
+        parameters={"cli": {"num_prompts": 32}, "config_fields": {"request_rate": 8}},
     )
 
     source = output.read_text(encoding="utf-8")
@@ -338,21 +337,38 @@ def test_every_documented_option_reaches_the_command_line() -> None:
     assert cli_arguments_for({}) == ["--max-num-workers", "1"]
 
 
-def test_sampling_options_reach_the_request_body() -> None:
-    """generation_kwargs is merged straight into the OpenAI request by the model class."""
+def test_config_fields_are_whatever_the_chosen_config_file_declares() -> None:
+    """The editable fields differ per config file, so the job writes the ones it was given
+    rather than a fixed list that would invent fields one file lacks and drop fields it has."""
     source = render_config(
         mode="accuracy",
         dataset_import=GSM8K_ACCURACY_IMPORT,
         dataset_symbol="gsm8k_datasets",
         endpoint=endpoint_snapshot(),
-        parameters={"temperature": 0.7, "top_p": 0.95, "seed": 42, "batch_size": 8, "retry": 3},
+        parameters={
+            "config_fields": {"batch_size": 8, "retry": 3, "returns_tool_calls": True},
+            "generation_kwargs": {"temperature": 0.7, "do_sample": True},
+        },
     )
 
     compile(source, "<generated>", "exec")
     kwargs = model_update_kwargs(source)
-    assert kwargs["generation_kwargs"] == {"seed": 42, "temperature": 0.7, "top_p": 0.95}
+    assert kwargs["generation_kwargs"] == {"do_sample": True, "temperature": 0.7}
     assert kwargs["batch_size"] == 8
     assert kwargs["retry"] == 3
+    assert kwargs["returns_tool_calls"] is True
+
+
+def test_a_field_name_that_is_not_an_identifier_is_refused() -> None:
+    """Field names reach a generated Python file, so anything but an identifier is injection."""
+    with pytest.raises(ValueError):
+        render_config(
+            mode="accuracy",
+            dataset_import=GSM8K_ACCURACY_IMPORT,
+            dataset_symbol="gsm8k_datasets",
+            endpoint=endpoint_snapshot(),
+            parameters={"config_fields": {"batch_size=1)\nimport os\n#": 1}},
+        )
 
 
 def test_untouched_sampling_options_are_left_out_entirely() -> None:

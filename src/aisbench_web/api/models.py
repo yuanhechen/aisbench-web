@@ -9,7 +9,11 @@ from pydantic import BaseModel, SecretStr, field_validator
 
 from aisbench_web.datasets.catalog import load_model_configs
 from aisbench_web.dependencies import get_current_user
-from aisbench_web.jobs.config_generator import CHAT_ENDPOINT, aisbench_service_url
+from aisbench_web.jobs.config_generator import (
+    CHAT_ENDPOINT,
+    MODEL_IMPORTS,
+    aisbench_service_url,
+)
 from aisbench_web.repositories.models import (
     DuplicateEndpointNameError,
     ModelEndpoint,
@@ -267,6 +271,14 @@ def _not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=NOT_FOUND_DETAIL)
 
 
+class ConfigFieldResponse(BaseModel):
+    """A field of a model config, with the value that file gives it."""
+
+    name: str
+    default: bool | int | float | str
+    kind: str
+
+
 class ModelConfigResponse(BaseModel):
     """An AISBench model config that can drive an HTTP endpoint."""
 
@@ -274,6 +286,11 @@ class ModelConfigResponse(BaseModel):
     family: str
     class_name: str
     stream: bool
+    #: The mode that uses this config when the user picks none, so its fields can be shown.
+    default_for: str | None = None
+    #: What this file lets a job change. Config files differ, so this list differs with them.
+    fields: list[ConfigFieldResponse]
+    generation_fields: list[ConfigFieldResponse]
 
 
 @router.get("/configs", response_model=list[ModelConfigResponse])
@@ -289,6 +306,14 @@ def list_model_configs(_user: CurrentUserDependency) -> list[ModelConfigResponse
             family=config.family,
             class_name=config.class_name,
             stream=config.stream,
+            default_for=next(
+                (mode for mode, path in MODEL_IMPORTS.items() if path == config.import_path),
+                None,
+            ),
+            fields=[ConfigFieldResponse(**vars(field)) for field in config.fields],
+            generation_fields=[
+                ConfigFieldResponse(**vars(field)) for field in config.generation_fields
+            ],
         )
         for config in load_model_configs()
     ]

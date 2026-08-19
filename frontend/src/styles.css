@@ -691,10 +691,24 @@ select.input {
   margin-top: 10px;
 }
 
+/* The config file and the command line are two different things in AISBench; a form that
+   runs them together is what made people set a field expecting the other to change. */
+.param-group {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  margin-top: 16px;
+  padding: 14px 16px 16px;
+}
+
 .group-title {
-  color: var(--text-secondary);
-  font-size: 12px;
-  margin: 16px 0 8px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+
+.param-group > .field-hint {
+  margin: 0 0 12px;
 }
 
 .checkbox-option .field-hint {
