@@ -2,8 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../api/client";
 import type { Job } from "../api/types";
+import { useApiQuery } from "../api/use-query";
 import { useAuth } from "../auth/auth-context";
 import { JobArtifacts, JobMetrics } from "../components/job-results";
+import type { Artifact } from "../components/job-results";
+import { JobSummary } from "../components/job-summary";
+import { LogView } from "../components/log-view";
 import { RunConfiguration } from "../components/run-configuration";
 import { ACTIVE_STATUSES, StatusLabel } from "../components/status";
 import { useI18n } from "../i18n/i18n-context";
@@ -24,12 +28,16 @@ function eventSocketUrl(jobId: string): string {
 }
 
 export function JobDetailPage({ jobId }: { jobId: string }) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const { reportFailure } = useAuth();
   const [job, setJob] = useState<Job | null>(null);
   const [log, setLog] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
+  // One fetch, two columns: the files list in the rail and the summary reads in the main.
+  const artifacts = useApiQuery<Artifact[]>(`/api/jobs/${jobId}/artifacts`, {
+    onFailure: reportFailure,
+  });
   const [cancelling, setCancelling] = useState(false);
   // The last byte the server confirmed; a reconnect resumes from here, never from zero.
   const offsetRef = useRef(0);
@@ -133,21 +141,17 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
 
   const cancellable = active;
   const failed = job.status === "failed" || job.status === "cancelled";
-  // Different moments ask different questions. While it runs, the only answers are the
-  // progress and the log; once it succeeds, the number is the answer and the log is
-  // reference; once it fails, the log is the answer.
   const elapsed = durationBetween(job.started_at, job.finished_at);
 
   return (
     <div className="task-view">
       <header className="task-context">
         <div className="task-context-main">
-          <h1 className="workspace-title">{job.name === "" ? job.dataset.name : job.name}</h1>
-          <p className="workspace-subtitle">
+          <h1 className="task-title">{job.name === "" ? job.dataset.name : job.name}</h1>
+          <p className="task-subtitle">
             {/* An endpoint whose model was never detected has no name to print. */}
             {[
               job.mode === "accuracy" ? t("newJob.accuracy") : t("newJob.performance"),
-              job.dataset.name,
               job.model.model_name,
             ]
               .filter((part) => part !== "")
@@ -159,7 +163,7 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
           {cancellable &&
             (confirmingCancel ? (
               <span className="task-actions">
-                <span>{t("jobDetail.confirmCancel")}</span>
+                <span className="task-confirm">{t("jobDetail.confirmCancel")}</span>
                 <button
                   type="button"
                   className="button-danger"
@@ -188,71 +192,75 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
         </div>
       </header>
 
-      {job.error_message !== null && (
-        <p className="form-error" role="alert">
-          {job.error_message}
-        </p>
-      )}
-
-      {job.status === "queued" && job.queue_position !== null && (
-        <p className="task-meta">
-          {t("jobDetail.queuePosition")} {job.queue_position} · {t("jobDetail.ahead")}{" "}
-          {job.queue_position - 1}
-        </p>
-      )}
-
-      {/* A finished job has no progress left to report; the status label already said so. */}
-      {active && job.progress !== null && (
-        <div className="progress">
-          <div className="progress-line">
-            {t("jobDetail.progress")} {job.progress.completed} / {job.progress.total}
-            {job.progress.total > 0 &&
-              ` · ${Math.round((job.progress.completed / job.progress.total) * 100)}%`}
-          </div>
-          {job.progress.total > 0 && (
-            <div className="progress-track">
-              <div
-                className="progress-fill"
-                style={{
-                  width: `${Math.min(100, (job.progress.completed / job.progress.total) * 100)}%`,
-                }}
-              />
-            </div>
+      {/* Main column carries what happened; the rail carries what it was run with. */}
+      <div className="task-columns">
+        <div className="task-main">
+          {job.error_message !== null && (
+            <p className="banner banner-danger" role="alert">
+              {job.error_message}
+            </p>
           )}
+
+          {job.status === "queued" && job.queue_position !== null && (
+            <p className="banner">
+              {t("jobDetail.queuePosition")} {job.queue_position} · {t("jobDetail.ahead")}{" "}
+              {job.queue_position - 1}
+            </p>
+          )}
+
+          {/* A finished job has no progress left to report; the status badge already said so. */}
+          {active && job.progress !== null && (
+            <section className="card">
+              <div className="progress">
+                <div className="progress-line">
+                  {t("jobDetail.progress")} {job.progress.completed} / {job.progress.total}
+                  {job.progress.total > 0 &&
+                    ` · ${Math.round((job.progress.completed / job.progress.total) * 100)}%`}
+                </div>
+                {job.progress.total > 0 && (
+                  <div className="progress-track">
+                    <div
+                      className="progress-fill"
+                      style={{
+                        width: `${Math.min(
+                          100,
+                          (job.progress.completed / job.progress.total) * 100,
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            </section>
+          )}
+
+          {job.status === "succeeded" && (
+            <>
+              <JobMetrics jobId={jobId} datasetName={job.dataset.name} />
+              <JobSummary jobId={jobId} artifacts={artifacts.data ?? []} />
+            </>
+          )}
+
+          {/* Open when the log is the answer: while it runs, and after it goes wrong. */}
+          <details className="card card-log" open={active || failed}>
+            <summary className="card-title">
+              {t("jobDetail.log")}
+              {active && <span className="live-dot" aria-label={t("jobDetail.live")} />}
+            </summary>
+            <LogView ref={logRef} text={log} empty={t("jobDetail.noLogYet")} />
+          </details>
         </div>
-      )}
 
-      {job.status === "succeeded" && <JobMetrics jobId={jobId} />}
-
-      <p className="task-meta">
-        {[
-          elapsed === null ? null : `${t("jobDetail.elapsed")} ${elapsed}`,
-          job.finished_at === null
-            ? null
-            : `${t("jobDetail.finishedAt")} ${formatMoment(job.finished_at, locale)}`,
-          job.exit_code === null || job.exit_code === 0 ? null : `exit ${job.exit_code}`,
-        ]
-          .filter((part) => part !== null)
-          .join(" · ")}
-      </p>
-
-      {job.status === "succeeded" && <JobArtifacts jobId={jobId} />}
-
-      {/* Open when the log is the answer: while it runs, and after it goes wrong. */}
-      <details className="task-block task-fold" open={active || failed}>
-        <summary>
-          {t("jobDetail.log")}
-          {active && <span className="live-dot" aria-label={t("jobDetail.live")} />}
-        </summary>
-        <pre className="log-view" ref={logRef}>
-          {log === "" ? t("jobDetail.noLogYet") : log}
-        </pre>
-      </details>
-
-      <details className="task-block task-fold">
-        <summary>{t("jobDetail.configuration")}</summary>
-        <RunConfiguration job={job} />
-      </details>
+        <aside className="task-rail">
+          <section className="card">
+            <h2 className="card-title">{t("jobDetail.runInfo")}</h2>
+            <RunConfiguration job={job} elapsed={elapsed} />
+          </section>
+          {job.status === "succeeded" && (
+            <JobArtifacts jobId={jobId} artifacts={artifacts.data ?? []} />
+          )}
+        </aside>
+      </div>
     </div>
   );
 }
@@ -276,14 +284,4 @@ function durationBetween(started: string | null, finished: string | null): strin
     return `${minutes}m ${seconds % 60}s`;
   }
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
-}
-
-function formatMoment(value: string, locale: string): string {
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime())
-    ? value
-    : parsed.toLocaleString(locale === "zh" ? "zh-CN" : "en-GB", {
-        dateStyle: "short",
-        timeStyle: "short",
-      });
 }

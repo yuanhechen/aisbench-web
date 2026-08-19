@@ -9,6 +9,7 @@ import { AuthProvider } from "../auth/auth-context";
 import { installFakeWebSocket } from "../test/fake-websocket";
 import { server } from "../test/server";
 import { JobDetailPage } from "./job-detail-page";
+import { splitRow } from "../components/job-summary";
 
 const ALICE = { id: "u1", username: "alice" };
 
@@ -162,7 +163,7 @@ describe("job detail", () => {
     renderDetail();
 
     const subtitle = await screen.findByText(/精度评测/);
-    expect(subtitle).toHaveTextContent("精度评测 · GSM8K");
+    expect(subtitle).toHaveTextContent("精度评测");
     // A trailing separator with nothing after it reads as a rendering fault.
     expect(subtitle.textContent?.trimEnd().endsWith("·")).toBe(false);
     fake.restore();
@@ -248,13 +249,14 @@ describe("job detail", () => {
     const fake = installFakeWebSocket();
     renderDetail();
 
-    expect(await screen.findByText("gsm8k.accuracy")).toBeInTheDocument();
+    expect(await screen.findByText("accuracy")).toBeInTheDocument();
     expect(screen.queryByText("SomeFutureMetric")).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "展开其他指标" }));
     expect(screen.getByText("SomeFutureMetric")).toBeInTheDocument();
 
-    expect(screen.getByRole("link", { name: "summary/summary_1.csv" })).toHaveAttribute(
+    // In a narrow rail the file name identifies the file; the path is the tooltip.
+    expect(screen.getByRole("link", { name: /summary_1/ })).toHaveAttribute(
       "href",
       "/api/jobs/job-1/artifacts/artifact-1",
     );
@@ -291,7 +293,6 @@ describe("job detail", () => {
   it("prints the parameters instead of the word Object", async () => {
     // Parameters arrive in groups; stringifying a group renders "[object Object]", which
     // tells the reader nothing about what was run.
-    const user = userEvent.setup();
     server.use(
       http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
       http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
@@ -301,8 +302,7 @@ describe("job detail", () => {
     const fake = installFakeWebSocket();
     renderDetail();
 
-    await user.click(await screen.findByText("配置快照"));
-    expect(screen.getByText(/batch_size=16/)).toBeInTheDocument();
+    expect(await screen.findByText(/batch_size=16/)).toBeInTheDocument();
     expect(screen.getByText(/temperature=0.7/)).toBeInTheDocument();
     // A command line, written the way it would have been typed.
     expect(screen.getByText("--num-prompts 8 --max-num-workers 1 --merge-ds")).toBeInTheDocument();
@@ -330,7 +330,7 @@ describe("job detail", () => {
     await screen.findByText("已成功");
     // The status label already says it finished; a full bar repeats it and says nothing.
     expect(container.querySelector(".progress-track")).toBeNull();
-    expect(screen.getByText(/用时 14s/)).toBeInTheDocument();
+    expect(screen.getByText("14s")).toBeInTheDocument();
     fake.restore();
   });
 
@@ -363,7 +363,6 @@ describe("job detail", () => {
   });
 
   it("groups the output files and stops repeating the run directory", async () => {
-    const user = userEvent.setup();
     server.use(
       http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
       http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
@@ -388,12 +387,13 @@ describe("job detail", () => {
     const fake = installFakeWebSocket();
     renderDetail();
 
-    await user.click(await screen.findByText(/原始输出/));
+    await screen.findByText(/原始输出/);
     // Every path of a run starts with the same run directory, so printing it eight times
     // pushes the part that differs off to the right.
-    expect(
-      screen.getByRole("link", { name: "summary/summary_20260819_101550.md" }),
-    ).toHaveAttribute("href", "/api/jobs/job-1/artifacts/a2");
+    expect(screen.getByRole("link", { name: /summary_20260819_101550/ })).toHaveAttribute(
+      "href",
+      "/api/jobs/job-1/artifacts/a2",
+    );
     expect(screen.getByText("汇总")).toBeInTheDocument();
     expect(screen.getByText("生成的配置")).toBeInTheDocument();
     fake.restore();
@@ -402,7 +402,6 @@ describe("job detail", () => {
   it("shows an older job's parameters rather than claiming it used defaults", async () => {
     // Jobs submitted before parameters were split stored one flat dict. Reading it with the
     // new keys finds nothing, and "all defaults" would be a false claim about that run.
-    const user = userEvent.setup();
     server.use(
       http.get("/api/jobs/job-1", () =>
         HttpResponse.json({
@@ -418,10 +417,53 @@ describe("job detail", () => {
     const fake = installFakeWebSocket();
     renderDetail();
 
-    await user.click(await screen.findByText("配置快照"));
-    expect(screen.getByText(/num_prompts=8/)).toBeInTheDocument();
+    expect(await screen.findByText(/num_prompts=8/)).toBeInTheDocument();
     expect(screen.queryByText("全部沿用默认值")).not.toBeInTheDocument();
     fake.restore();
+  });
+
+  it("shows the summary AISBench wrote, as a table rather than as a file to download", async () => {
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () =>
+        HttpResponse.json([
+          {
+            id: "sum-txt",
+            kind: "summary",
+            relative_path: "20260819_101550/summary/summary.txt",
+            content_type: "text/plain",
+          },
+          {
+            id: "sum-csv",
+            kind: "summary",
+            relative_path: "20260819_101550/summary/summary.csv",
+            content_type: "text/csv",
+          },
+        ]),
+      ),
+      // The .txt concatenates three formats with banner rules between them; the .csv is
+      // the table on its own, so that is the one worth reading.
+      http.get("/api/jobs/job-1/artifacts/sum-csv", () =>
+        HttpResponse.text("dataset,version,metric,mode,Qwen3-32B\ngsm8k,f588a9,accuracy,gen,82.50"),
+      ),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    const summary = await screen.findByRole("table");
+    expect(within(summary).getByRole("columnheader", { name: "Qwen3-32B" })).toBeInTheDocument();
+    expect(within(summary).getByText("f588a9")).toBeInTheDocument();
+    expect(within(summary).getByText("82.50")).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("keeps a comma inside a quoted summary cell out of the columns", () => {
+    // AISBench does not quote today, but a model name with a comma in it would silently
+    // shift every column after it.
+    expect(splitRow('a,"b,c",d')).toEqual(["a", "b,c", "d"]);
+    expect(splitRow('"say ""hi""",x')).toEqual(['say "hi"', "x"]);
   });
 
   it("shows the failure reason a failed job carries", async () => {

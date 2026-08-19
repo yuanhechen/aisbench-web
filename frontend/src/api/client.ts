@@ -63,8 +63,18 @@ export async function apiFetch<T>(path: string, init: RequestInit = {}): Promise
   return body as T;
 }
 
+/** An artifact is a file, not JSON; its body is read as written. */
+export async function apiText(path: string): Promise<string> {
+  const response = await fetch(path, { credentials: "same-origin" });
+  if (!response.ok) {
+    throw new ApiError(response.status, null, `${response.status} ${response.statusText}`.trim());
+  }
+  return response.text();
+}
+
 export const api = {
   get: <T>(path: string) => apiFetch<T>(path),
+  text: apiText,
   post: <T>(path: string, payload?: unknown) =>
     apiFetch<T>(path, {
       method: "POST",

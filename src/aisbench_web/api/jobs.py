@@ -284,7 +284,9 @@ def create_job(
     encrypted = endpoints.get_encrypted_api_key_for_owner(user.id, endpoint.id)
     job = repository.create(
         owner_id=user.id,
-        name=payload.name.strip() or f"{dataset.name} · {config.name}",
+        # AISBench names a config after its dataset, so pairing the two reads "ARC_c ·
+        # ARC_c_gen_0_shot_chat_prompt". The config name alone already says both.
+        name=payload.name.strip() or config.name,
         model_endpoint_id=endpoint.id,
         dataset_id=dataset.id,
         mode=payload.mode,

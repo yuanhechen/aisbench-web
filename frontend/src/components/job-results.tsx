@@ -12,7 +12,7 @@ interface Metric {
   unit: string | null;
 }
 
-interface Artifact {
+export interface Artifact {
   id: string;
   kind: string;
   relative_path: string;
@@ -45,26 +45,65 @@ function shortPath(artifact: Artifact): string {
   return artifact.relative_path.replace(RUN_DIRECTORY, "");
 }
 
+/** In a narrow column the file name is what identifies it; the path is a tooltip. */
+function baseName(artifact: Artifact): string {
+  const name = shortPath(artifact).split("/").pop() ?? "";
+  const dot = name.lastIndexOf(".");
+  return dot <= 0 ? name : name.slice(0, dot);
+}
+
+/** The path minus the file name, or nothing when the file sits at the top. */
+function directoryOf(artifact: Artifact): string | undefined {
+  const path = shortPath(artifact);
+  const slash = path.lastIndexOf("/");
+  return slash < 0 ? undefined : path.slice(0, slash);
+}
+
+function extensionOf(artifact: Artifact): string {
+  const name = shortPath(artifact).split("/").pop() ?? "";
+  const dot = name.lastIndexOf(".");
+  return dot <= 0 ? "" : name.slice(dot + 1);
+}
+
+/** `ARC-c.accuracy` under a heading that already says ARC_c is just `accuracy`. */
+function metricName(key: string, datasetName: string): string {
+  const prefix = `${datasetName.toLowerCase()}.`;
+  return key.toLowerCase().startsWith(prefix) ? key.slice(prefix.length) : key;
+}
+
 /**
  * The numbers the job was run to produce.
  *
- * This is the answer the page exists to give, so it is the one thing set in a size you can
- * read from across the desk. Everything else on the page is how it was obtained.
+ * This is the answer the page exists to give. One number gets the whole stage; a
+ * performance run reports a dozen, and twelve hero numbers are no hierarchy at all, so
+ * those become a grid that can be scanned instead.
  */
-export function MetricHeadline({ metrics }: { metrics: Metric[] }) {
+export function MetricHeadline({
+  metrics,
+  datasetName,
+}: {
+  metrics: Metric[];
+  datasetName: string;
+}) {
+  const single = metrics.length === 1;
   return (
-    <div className="metric-headline">
+    <div className={single ? "metric-hero" : "metric-grid"}>
       {metrics.map((metric) => (
-        <div key={metric.key}>
-          <p className="metric-name">{metric.key}</p>
-          <p className="metric-value">{display(metric)}</p>
+        <div className="metric" key={metric.key}>
+          <p className="metric-name" title={metric.key}>
+            {metricName(metric.key, datasetName)}
+          </p>
+          <p className="metric-value">
+            {metric.value !== null ? metric.value : (metric.text_value ?? "")}
+            {metric.unit !== null && <span className="metric-unit">{metric.unit}</span>}
+          </p>
         </div>
       ))}
     </div>
   );
 }
 
-export function JobMetrics({ jobId }: { jobId: string }) {
+export function JobMetrics({ jobId, datasetName }: { jobId: string; datasetName: string }) {
   const { t } = useI18n();
   const { reportFailure } = useAuth();
   const metrics = useApiQuery<Metric[]>(`/api/jobs/${jobId}/metrics`, {
@@ -79,8 +118,8 @@ export function JobMetrics({ jobId }: { jobId: string }) {
   return (
     <>
       {primary.length > 0 && (
-        <section className="task-block">
-          <MetricHeadline metrics={primary} />
+        <section className="card card-result">
+          <MetricHeadline metrics={primary} datasetName={datasetName} />
           {extra.length > 0 && (
             <>
               <button
@@ -110,21 +149,16 @@ export function JobMetrics({ jobId }: { jobId: string }) {
   );
 }
 
-export function JobArtifacts({ jobId }: { jobId: string }) {
+export function JobArtifacts({ jobId, artifacts }: { jobId: string; artifacts: Artifact[] }) {
   const { t } = useI18n();
-  const { reportFailure } = useAuth();
-  const artifacts = useApiQuery<Artifact[]>(`/api/jobs/${jobId}/artifacts`, {
-    onFailure: reportFailure,
-  });
-
-  const found = artifacts.data ?? [];
+  const found = artifacts;
   const visualizations = found.filter((artifact) => artifact.kind === "visualization");
 
   return (
     <>
       {visualizations.map((artifact) => (
-        <section className="task-block" key={artifact.id}>
-          <h2 className="form-step-title">{t("results.visualization")}</h2>
+        <section className="card" key={artifact.id}>
+          <h2 className="card-title">{t("results.visualization")}</h2>
           {/*
             The artifact endpoint authorizes the owner before serving. allow-scripts lets the
             Plotly bundle run; allow-same-origin is deliberately omitted so the frame cannot
@@ -140,10 +174,10 @@ export function JobArtifacts({ jobId }: { jobId: string }) {
       ))}
 
       {found.length > 0 && (
-        <details className="task-block task-fold">
-          <summary>
-            {t("results.artifacts")} <span className="fold-count">{found.length}</span>
-          </summary>
+        <section className="card">
+          <h2 className="card-title">
+            {t("results.artifacts")} <span className="card-count">{found.length}</span>
+          </h2>
           <div className="artifact-groups">
             {KIND_ORDER.map(([kind, label]) => {
               const group = found.filter((artifact) => artifact.kind === kind);
@@ -157,8 +191,14 @@ export function JobArtifacts({ jobId }: { jobId: string }) {
                     {group.map((artifact) => (
                       <li key={artifact.id}>
                         {/* Addressed by ID: the stored path is never accepted from the browser. */}
-                        <a href={`/api/jobs/${jobId}/artifacts/${artifact.id}`}>
-                          {shortPath(artifact)}
+                        {/* The tooltip carries the directory; repeating the file name
+                            the link already shows would say nothing. */}
+                        <a
+                          href={`/api/jobs/${jobId}/artifacts/${artifact.id}`}
+                          title={directoryOf(artifact)}
+                        >
+                          <span className="artifact-name">{baseName(artifact)}</span>
+                          <span className="artifact-ext">{extensionOf(artifact)}</span>
                         </a>
                       </li>
                     ))}
@@ -167,7 +207,7 @@ export function JobArtifacts({ jobId }: { jobId: string }) {
               );
             })}
           </div>
-        </details>
+        </section>
       )}
     </>
   );

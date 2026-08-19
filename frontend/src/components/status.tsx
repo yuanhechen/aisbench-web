@@ -14,10 +14,13 @@ export const JOB_STATUS_LABELS: Record<string, MessageKey> = {
 
 export const ACTIVE_STATUSES = ["queued", "starting", "running", "stopping"];
 
-/** Blue marks work in flight; a finished job is neutral and a failure is the one danger colour. */
+/** Four states worth telling apart: in flight, done, broken, and everything waiting. */
 function toneOf(status: string): string {
-  if (status === "running" || status === "starting") {
+  if (status === "running" || status === "starting" || status === "stopping") {
     return "status-active";
+  }
+  if (status === "succeeded") {
+    return "status-success";
   }
   if (status === "failed" || status === "interrupted") {
     return "status-danger";
