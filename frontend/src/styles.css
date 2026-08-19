@@ -690,3 +690,13 @@ select.input {
 .advanced > .field-grid {
   margin-top: 10px;
 }
+
+.group-title {
+  color: var(--text-secondary);
+  font-size: 12px;
+  margin: 16px 0 8px;
+}
+
+.checkbox-option .field-hint {
+  margin: 0;
+}

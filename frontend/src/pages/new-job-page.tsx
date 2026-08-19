@@ -319,161 +319,143 @@ export function NewJobPage() {
 
       <section className="form-step">
         <h2 className="form-step-title">{t("newJob.stepParameters")}</h2>
+
+        <p className="group-title">{t("newJob.groupModelConfig")}</p>
+        <div className="field-grid">
+          <NumberField
+            id="job-max-output"
+            label="max_out_len"
+            value={form.maxOutputLength}
+            onChange={(value) => update("maxOutputLength", value)}
+          />
+          <NumberField
+            id="job-batch-size"
+            label="batch_size"
+            hint={t("newJob.batchSizeHint")}
+            value={form.batchSize}
+            onChange={(value) => update("batchSize", value)}
+          />
+          <NumberField
+            id="job-retry"
+            label="retry"
+            value={form.retry}
+            onChange={(value) => update("retry", value)}
+          />
+          {form.mode === "performance" && (
+            <NumberField
+              id="job-request-rate"
+              label="request_rate"
+              hint={t("newJob.requestRateHint")}
+              value={form.requestRate}
+              onChange={(value) => update("requestRate", value)}
+            />
+          )}
+        </div>
+
+        <details className="advanced">
+          <summary>generation_kwargs</summary>
+          <p className="field-hint">{t("newJob.samplingHint")}</p>
+          <div className="field-grid">
+            {(
+              [
+                ["job-temperature", "temperature", "temperature"],
+                ["job-top-p", "top_p", "topP"],
+                ["job-top-k", "top_k", "topK"],
+                ["job-seed", "seed", "seed"],
+                ["job-repetition-penalty", "repetition_penalty", "repetitionPenalty"],
+              ] as const
+            ).map(([id, label, field]) => (
+              <NumberField
+                key={id}
+                id={id}
+                label={label}
+                value={form[field]}
+                onChange={(value) => update(field, value)}
+              />
+            ))}
+          </div>
+        </details>
+
+        <p className="group-title">{t("newJob.groupCli")}</p>
         <div className="field-grid">
           <NumberField
             id="job-num-prompts"
-            label={t("newJob.numPrompts")}
+            label="--num-prompts"
             hint={t("newJob.numPromptsHint")}
             value={form.numPrompts}
             onChange={(value) => update("numPrompts", value)}
           />
           <NumberField
             id="job-workers"
-            label={t("newJob.maxWorkers")}
+            label="--max-num-workers"
+            hint={t("newJob.maxWorkersHint")}
             value={form.maxNumWorkers}
             onChange={(value) => update("maxNumWorkers", value)}
           />
           <NumberField
-            id="job-max-output"
-            label={t("newJob.maxOutputLength")}
-            value={form.maxOutputLength}
-            onChange={(value) => update("maxOutputLength", value)}
+            id="job-workers-per-gpu"
+            label="--max-workers-per-gpu"
+            value={form.maxWorkersPerGpu}
+            onChange={(value) => update("maxWorkersPerGpu", value)}
           />
-          <NumberField
-            id="job-batch-size"
-            label={t("newJob.batchSize")}
-            value={form.batchSize}
-            onChange={(value) => update("batchSize", value)}
-          />
-        </div>
-
-        {form.mode === "accuracy" ? (
-          <>
-            <label className="checkbox-option">
-              <input
-                type="checkbox"
-                checked={form.dumpEvalDetails}
-                onChange={(event) => update("dumpEvalDetails", event.target.checked)}
-              />
-              <span>{t("newJob.dumpEvalDetails")}</span>
-            </label>
-            <label className="checkbox-option">
-              <input
-                type="checkbox"
-                checked={form.mergeDatasets}
-                onChange={(event) => update("mergeDatasets", event.target.checked)}
-              />
-              <span>{t("newJob.mergeDatasets")}</span>
-            </label>
-            <label className="checkbox-option">
-              <input
-                type="checkbox"
-                checked={form.dumpExtractRate}
-                onChange={(event) => update("dumpExtractRate", event.target.checked)}
-              />
-              <span>{t("newJob.dumpExtractRate")}</span>
-            </label>
-          </>
-        ) : (
-          <>
-            <div className="field-grid">
-              <NumberField
-                id="job-request-rate"
-                label={t("newJob.requestRate")}
-                hint={t("newJob.requestRateHint")}
-                value={form.requestRate}
-                onChange={(value) => update("requestRate", value)}
-              />
+          {form.mode === "performance" && (
+            <>
               <NumberField
                 id="job-warmups"
-                label={t("newJob.numWarmups")}
+                label="--num-warmups"
                 value={form.numWarmups}
                 onChange={(value) => update("numWarmups", value)}
               />
               {form.pressure && (
                 <NumberField
                   id="job-pressure-time"
-                  label={t("newJob.pressureTime")}
+                  label="--pressure-time"
                   value={form.pressureTime}
                   onChange={(value) => update("pressureTime", value)}
                 />
               )}
-            </div>
-            <label className="checkbox-option">
-              <input
-                type="checkbox"
-                checked={form.pressure}
-                onChange={(event) => update("pressure", event.target.checked)}
-              />
-              <span>{t("newJob.pressure")}</span>
-            </label>
-            <label className="checkbox-option">
-              <input
-                type="checkbox"
-                checked={form.specDecode}
-                onChange={(event) => update("specDecode", event.target.checked)}
-              />
-              <span>{t("newJob.specDecode")}</span>
-            </label>
-            <label className="checkbox-option">
-              <input
-                type="checkbox"
-                checked={form.visualization}
-                onChange={(event) => update("visualization", event.target.checked)}
-              />
-              <span>{t("newJob.visualization")}</span>
-            </label>
+            </>
+          )}
+        </div>
+
+        {form.mode === "accuracy" ? (
+          <>
+            <CheckboxField
+              label="--dump-eval-details"
+              checked={form.dumpEvalDetails}
+              onChange={(value) => update("dumpEvalDetails", value)}
+            />
+            <CheckboxField
+              label="--merge-ds"
+              checked={form.mergeDatasets}
+              onChange={(value) => update("mergeDatasets", value)}
+            />
+            <CheckboxField
+              label="--dump-extract-rate"
+              checked={form.dumpExtractRate}
+              onChange={(value) => update("dumpExtractRate", value)}
+            />
+          </>
+        ) : (
+          <>
+            <CheckboxField
+              label="--pressure"
+              checked={form.pressure}
+              onChange={(value) => update("pressure", value)}
+            />
+            <CheckboxField
+              label="--spec-decode"
+              checked={form.specDecode}
+              onChange={(value) => update("specDecode", value)}
+            />
+            <CheckboxField
+              label="--mode perf_viz"
+              hint={t("newJob.visualizationHint")}
+              checked={form.visualization}
+              onChange={(value) => update("visualization", value)}
+            />
           </>
         )}
-
-        <details className="advanced">
-          <summary>{t("newJob.sampling")}</summary>
-          <p className="field-hint">{t("newJob.samplingHint")}</p>
-          <div className="field-grid">
-            <NumberField
-              id="job-temperature"
-              label="temperature"
-              value={form.temperature}
-              onChange={(value) => update("temperature", value)}
-            />
-            <NumberField
-              id="job-top-p"
-              label="top_p"
-              value={form.topP}
-              onChange={(value) => update("topP", value)}
-            />
-            <NumberField
-              id="job-top-k"
-              label="top_k"
-              value={form.topK}
-              onChange={(value) => update("topK", value)}
-            />
-            <NumberField
-              id="job-seed"
-              label="seed"
-              value={form.seed}
-              onChange={(value) => update("seed", value)}
-            />
-            <NumberField
-              id="job-repetition-penalty"
-              label="repetition_penalty"
-              value={form.repetitionPenalty}
-              onChange={(value) => update("repetitionPenalty", value)}
-            />
-            <NumberField
-              id="job-retry"
-              label={t("newJob.retry")}
-              value={form.retry}
-              onChange={(value) => update("retry", value)}
-            />
-            <NumberField
-              id="job-workers-per-gpu"
-              label={t("newJob.maxWorkersPerGpu")}
-              value={form.maxWorkersPerGpu}
-              onChange={(value) => update("maxWorkersPerGpu", value)}
-            />
-          </div>
-        </details>
       </section>
 
       <section className="form-step">
@@ -521,6 +503,26 @@ function describeEndpoint(model: ModelEndpoint): string {
   return `${model.name} · ${served}`;
 }
 
+function CheckboxField({
+  label,
+  hint,
+  checked,
+  onChange,
+}: {
+  label: string;
+  hint?: string;
+  checked: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="checkbox-option">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+      <span className="mono">{label}</span>
+      {hint !== undefined && <span className="field-hint">{hint}</span>}
+    </label>
+  );
+}
+
 function NumberField({
   id,
   label,
@@ -536,7 +538,7 @@ function NumberField({
 }) {
   return (
     <div>
-      <label className="field" htmlFor={id}>
+      <label className="field mono" htmlFor={id}>
         {label}
       </label>
       <input

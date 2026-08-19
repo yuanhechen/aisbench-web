@@ -122,8 +122,8 @@ describe("new evaluation", () => {
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
     await user.click(screen.getByRole("radio", { name: "性能评测" }));
     await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
-    await user.clear(screen.getByLabelText("数据条数"));
-    await user.type(screen.getByLabelText("数据条数"), "32");
+    await user.clear(screen.getByLabelText("--num-prompts"));
+    await user.type(screen.getByLabelText("--num-prompts"), "32");
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     await waitFor(() => expect(submitted).not.toBeNull());
@@ -149,8 +149,8 @@ describe("new evaluation", () => {
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
     await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
-    await user.clear(screen.getByLabelText("最大并行数"));
-    await user.type(screen.getByLabelText("最大并行数"), "4");
+    await user.clear(screen.getByLabelText("--max-num-workers"));
+    await user.type(screen.getByLabelText("--max-num-workers"), "4");
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     await waitFor(() => expect(submitted.mode).toBe("accuracy"));
@@ -348,6 +348,25 @@ describe("new evaluation", () => {
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     await waitFor(() => expect(submitted.name).toBe("夜间基线"));
+  });
+
+  it("labels each parameter as AISBench names it, grouped by where it lands", async () => {
+    const user = userEvent.setup();
+    renderAt("/jobs/new");
+
+    await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
+    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+
+    // Fields of the generated model config.
+    expect(screen.getByLabelText("max_out_len")).toBeInTheDocument();
+    expect(screen.getByLabelText("batch_size")).toBeInTheDocument();
+    // Options AISBench takes on its own command line.
+    expect(screen.getByLabelText("--num-prompts")).toBeInTheDocument();
+    expect(screen.getByLabelText("--max-num-workers")).toBeInTheDocument();
+    // batch_size is the concurrency knob; --max-num-workers is task-level and does nothing
+    // for a single dataset, so the two must not read as interchangeable.
+    expect(screen.getByText(/并发请求数/)).toBeInTheDocument();
+    expect(screen.getByText(/单数据集只切出一个任务/)).toBeInTheDocument();
   });
 
   it("sends only the parameters the user filled in", async () => {
