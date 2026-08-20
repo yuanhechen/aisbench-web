@@ -1,11 +1,13 @@
 import json
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from aisbench_web.db import Database
+from aisbench_web.jobs.dataset_progress import DatasetStatus
 from aisbench_web.jobs.states import (
     ACTIVE_STATUSES,
     TERMINAL_STATUSES,
@@ -17,6 +19,15 @@ CONFIG_FILENAME = "generated_config.py"
 LOG_FILENAME = "process.log"
 OUTPUTS_DIRNAME = "outputs"
 UPDATABLE_COLUMNS = ("pid", "exit_code", "error_code", "error_message")
+
+
+def dataset_entries(snapshot: dict) -> list[dict]:
+    """Datasets of a job snapshot. Jobs created before multi-dataset support stored one
+    entry at the top level; read both shapes the same way."""
+    entries = snapshot.get("datasets")
+    if isinstance(entries, list) and entries:
+        return [entry for entry in entries if isinstance(entry, dict)]
+    return [snapshot]
 
 SELECTED_COLUMNS = (
     "id, owner_id, name, model_endpoint_id, dataset_id, mode, status, model_snapshot_json, "
@@ -41,6 +52,23 @@ class StoredArtifact:
     kind: str
     relative_path: str
     content_type: str
+
+
+@dataclass(frozen=True)
+class StoredDatasetProgress:
+    dataset: str
+    phase: str
+    raw_status: str | None
+    completed: int | None
+    total: int | None
+    rate: str | None
+    counters: dict | None
+    log_path: str | None
+    metrics: dict | None
+    correct_count: int | None
+    total_count: int | None
+    started_at: str | None
+    updated_at: str
 
 
 @dataclass(frozen=True)
@@ -236,6 +264,171 @@ class JobRepository:
                 (completed, total, self._now(), job_id),
             )
 
+    def replace_dataset_progress(self, job_id: str, rows: Sequence[DatasetStatus]) -> None:
+        """The rows mirror what AISBench reports right now, so a scan replaces them wholly."""
+        timestamp = self._now()
+        with self.database.connect() as connection:
+            connection.execute("DELETE FROM job_dataset_progress WHERE job_id = ?", (job_id,))
+            connection.executemany(
+                """
+                INSERT INTO job_dataset_progress (
+                  job_id, dataset, phase, raw_status, completed, total, rate, counters,
+                  log_path, metrics_json, correct_count, total_count, started_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        job_id,
+                        row.dataset,
+                        row.phase,
+                        row.raw_status,
+                        row.completed,
+                        row.total,
+                        row.rate,
+                        _json_or_none(row.counters),
+                        row.log_path,
+                        _json_or_none(row.metrics),
+                        row.correct_count,
+                        row.total_count,
+                        row.started_at,
+                        row.updated_at or timestamp,
+                    )
+                    for row in rows
+                ],
+            )
+
+    def list_dataset_progress(self, job_id: str) -> list[StoredDatasetProgress]:
+        with self.database.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT dataset, phase, raw_status, completed, total, rate, counters, log_path,
+                       metrics_json, correct_count, total_count, started_at, updated_at
+                FROM job_dataset_progress
+                WHERE job_id = ?
+                ORDER BY rowid
+                """,
+                (job_id,),
+            ).fetchall()
+        return [self._dataset_progress_from_row(row) for row in rows]
+
+    def get_dataset_progress(self, job_id: str, dataset: str) -> StoredDatasetProgress | None:
+        with self.database.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT dataset, phase, raw_status, completed, total, rate, counters, log_path,
+                       metrics_json, correct_count, total_count, started_at, updated_at
+                FROM job_dataset_progress
+                WHERE job_id = ? AND dataset = ?
+                """,
+                (job_id, dataset),
+            ).fetchone()
+        return None if row is None else self._dataset_progress_from_row(row)
+
+    def store_dataset_results(
+        self,
+        job_id: str,
+        per_dataset: dict[str, dict[str, tuple[float | None, str | None, str | None]]],
+        counts: dict[str, tuple[int, int]],
+    ) -> None:
+        """Fill the result columns of the dataset rows of a run that succeeded.
+
+        A merged run tracked one row under the merged task name while it ran; its results
+        are per dataset, so the rows are rebuilt around what the results actually contain.
+        A row that failed keeps its story: a dash row in the summary is the absence of a
+        result, and overwriting it would hide the failure.
+        """
+        timestamp = self._now()
+        with self.database.connect() as connection:
+            existing = {
+                row["dataset"]: row
+                for row in connection.execute(
+                    "SELECT dataset, phase, completed, total, log_path, metrics_json, "
+                    "correct_count, total_count, started_at "
+                    "FROM job_dataset_progress WHERE job_id = ?",
+                    (job_id,),
+                ).fetchall()
+            }
+            rows = []
+            for name, row in existing.items():
+                if row["phase"] != "failed":
+                    continue
+                rows.append(
+                    (
+                        job_id,
+                        name,
+                        row["phase"],
+                        None,
+                        row["completed"],
+                        row["total"],
+                        None,
+                        None,
+                        row["log_path"],
+                        row["metrics_json"],
+                        row["correct_count"],
+                        row["total_count"],
+                        row["started_at"],
+                        timestamp,
+                    )
+                )
+            for dataset, metrics in per_dataset.items():
+                prior = existing.get(dataset)
+                if prior is not None and prior["phase"] == "failed":
+                    continue
+                correct, total = counts.get(dataset, (None, None))
+                rows.append(
+                    (
+                        job_id,
+                        dataset,
+                        "finished",
+                        None,
+                        prior["completed"] if prior is not None else None,
+                        prior["total"] if prior is not None else None,
+                        None,
+                        None,
+                        prior["log_path"] if prior is not None else None,
+                        json.dumps(
+                            {
+                                name: {"value": value, "text_value": text, "unit": unit}
+                                for name, (value, text, unit) in sorted(metrics.items())
+                            },
+                            ensure_ascii=False,
+                        ),
+                        correct,
+                        total,
+                        prior["started_at"] if prior is not None else None,
+                        timestamp,
+                    )
+                )
+            connection.execute("DELETE FROM job_dataset_progress WHERE job_id = ?", (job_id,))
+            if rows:
+                connection.executemany(
+                    """
+                    INSERT INTO job_dataset_progress (
+                      job_id, dataset, phase, raw_status, completed, total, rate, counters,
+                      log_path, metrics_json, correct_count, total_count, started_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    rows,
+                )
+
+    @staticmethod
+    def _dataset_progress_from_row(row: sqlite3.Row) -> StoredDatasetProgress:
+        return StoredDatasetProgress(
+            dataset=row["dataset"],
+            phase=row["phase"],
+            raw_status=row["raw_status"],
+            completed=row["completed"],
+            total=row["total"],
+            rate=row["rate"],
+            counters=_none_or_json(row["counters"]),
+            log_path=row["log_path"],
+            metrics=_none_or_json(row["metrics_json"]),
+            correct_count=row["correct_count"],
+            total_count=row["total_count"],
+            started_at=row["started_at"],
+            updated_at=row["updated_at"],
+        )
+
     def get_for_owner(self, job_id: str, owner_id: str) -> Job | None:
         with self.database.connect() as connection:
             row = connection.execute(
@@ -427,3 +620,17 @@ class JobRepository:
             progress_completed=row["progress_completed"],
             progress_total=row["progress_total"],
         )
+
+
+def _json_or_none(value: dict | None) -> str | None:
+    return None if value is None else json.dumps(value, ensure_ascii=False, sort_keys=True)
+
+
+def _none_or_json(text: str | None) -> dict | None:
+    if not text:
+        return None
+    try:
+        decoded = json.loads(text)
+    except json.JSONDecodeError:
+        return None
+    return decoded if isinstance(decoded, dict) else None

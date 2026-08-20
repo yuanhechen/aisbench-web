@@ -1,3 +1,10 @@
+.mono,
+pre,
+code,
+kbd {
+  font-variant-ligatures: none;
+}
+
 /* Two surfaces: a tinted rail and a white work area. Restraint is the point — colour
    carries meaning (state, focus, danger) and never decoration. One neutral ramp underpins
    every border, background and shade of text so nothing is picked by eye. */
@@ -55,7 +62,9 @@
   --shadow-lg: 0 16px 40px -8px rgb(22 24 28 / 18%), 0 4px 12px -4px rgb(22 24 28 / 8%);
   --ring: 0 0 0 3px rgb(37 99 235 / 18%);
 
-  --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --sans: "Fira Sans", -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+    sans-serif;
+  --mono: "Fira Code", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
 
 /* The label above a group. Small, spaced and quiet, so a heading is felt as a level rather
@@ -85,13 +94,18 @@ body,
 body {
   background: var(--canvas);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Hiragino Sans GB", "Microsoft YaHei", Roboto, Helvetica, Arial, sans-serif;
+  font-family: var(--sans);
   font-size: 14px;
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   text-rendering: optimizeLegibility;
+}
+
+/* A button is the pointer's business; the platform default reads as disabled. */
+button:not(:disabled),
+summary {
+  cursor: pointer;
 }
 
 /* One visible focus treatment for everything reachable by keyboard. */
@@ -119,7 +133,7 @@ body {
 }
 
 .sidebar-brand {
-  font-size: 15px;
+  font-size: 14px;
   font-weight: 650;
   letter-spacing: -0.01em;
   padding: 2px 8px;
@@ -218,7 +232,7 @@ body {
 .workspace {
   background: var(--canvas);
   overflow-y: auto;
-  padding: var(--s-5) var(--s-6) var(--s-7);
+  padding: var(--s-5) max(var(--s-6), 4vw) var(--s-7);
 }
 
 .workspace-header {
@@ -298,7 +312,7 @@ body {
 }
 
 .auth-title {
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 620;
   letter-spacing: -0.01em;
   margin: 0 0 12px;
@@ -331,15 +345,17 @@ body {
 }
 
 .field {
-  color: var(--text-secondary);
+  /* A label is the question; the hint is the aside. The two must not share a grey. */
+  color: var(--n-700);
   display: block;
   font-size: 13px;
+  font-weight: 500;
   margin-bottom: 4px;
   margin-top: 4px;
 }
 
 .field-hint {
-  color: var(--text-tertiary);
+  color: var(--n-600);
   font-size: 12px;
   margin: 0;
 }
@@ -568,7 +584,7 @@ input[type="radio"] {
 
 .data-table td {
   border-bottom: 1px solid var(--line);
-  padding: 10px 14px 10px 0;
+  padding: 12px 14px 12px 0;
   vertical-align: middle;
 }
 
@@ -605,7 +621,7 @@ input[type="radio"] {
 .mono {
   color: var(--text-secondary);
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 12px;
 }
 
 .modal-backdrop {
@@ -649,7 +665,7 @@ input[type="radio"] {
 
 .form-step {
   border-bottom: 1px solid var(--line);
-  padding: var(--s-5) 0;
+  padding: var(--s-3) 0;
 }
 
 .form-step:last-of-type {
@@ -657,12 +673,25 @@ input[type="radio"] {
 }
 
 .form-step-title {
-  color: var(--n-500);
+  color: var(--n-600);
   font-size: 11px;
   font-weight: 600;
   letter-spacing: 0.07em;
   margin: 0 0 var(--s-3);
   text-transform: uppercase;
+}
+
+/* The step number is the one place the accent speaks on the form: order at a glance,
+   without colouring anything the user types into. */
+.form-step-no {
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  margin-right: 6px;
+}
+
+.form-step-no::after {
+  color: var(--n-300);
+  content: ".";
 }
 
 .field-grid .input {
@@ -677,7 +706,123 @@ input[type="radio"] {
   display: grid;
   gap: var(--s-3) var(--s-4);
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  max-width: 620px;
+  max-width: 880px;
+}
+
+/* What to run left, how to run it right — the same seam the job page uses between
+   the run and its rail, so the two pages speak one layout language. */
+.job-columns {
+  display: grid;
+  gap: 0 var(--s-6);
+  grid-template-columns: minmax(300px, 2fr) minmax(340px, 3fr);
+}
+
+.job-column-params {
+  border-left: 1px solid var(--line);
+  padding-left: var(--s-6);
+}
+
+.job-column .job-column {
+  min-width: 0;
+}
+
+/* Inside a half-width column the opening choices stack; a three-across row needs
+   the whole page's width to stay a row. */
+.job-column .setup-row {
+  grid-template-columns: 1fr;
+}
+
+.job-column .combobox,
+.job-column .ds-variants {
+  max-width: none;
+}
+
+@media (max-width: 1080px) {
+  .job-columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .job-column-params {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding-left: 0;
+    padding-top: var(--s-4);
+  }
+}
+
+/* The two evaluation types as one segmented control: a pair of states reads as a
+   switch, not as two form questions. */
+.segmented {
+  background: var(--n-100);
+  border-radius: 999px;
+  display: inline-flex;
+  margin-top: var(--s-3);
+  padding: 2px;
+}
+
+.segmented-item {
+  cursor: pointer;
+}
+
+.segmented-item input {
+  height: 1px;
+  opacity: 0;
+  position: absolute;
+  width: 1px;
+}
+
+.segmented-item span {
+  border-radius: 999px;
+  color: var(--n-600);
+  display: inline-block;
+  font-size: 13px;
+  font-weight: 500;
+  padding: 4px 16px;
+  transition: background 150ms ease, color 150ms ease;
+}
+
+.segmented-item input:checked + span {
+  background: var(--n-0);
+  box-shadow: var(--shadow-sm);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.segmented-item input:focus-visible + span {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* The opening choices share one row: name, endpoint, config file. */
+.setup-row {
+  display: grid;
+  gap: var(--s-3) var(--s-4);
+  grid-template-columns: minmax(150px, 1fr) minmax(200px, 1.3fr) minmax(200px, 1.3fr);
+  max-width: 880px;
+}
+
+.setup-row + .radio-row {
+  margin-top: var(--s-3);
+}
+
+/* The last step is a row: whatever the submit has to say, then the button. */
+.submit-step {
+  align-items: center;
+  display: flex;
+  gap: var(--s-4);
+  justify-content: flex-end;
+}
+
+.submit-step .form-error,
+.submit-step .form-success {
+  flex: 1;
+  margin: 0;
+  text-align: left;
+}
+
+.submit-step .button-primary {
+  align-self: center;
+  margin-top: 0;
 }
 
 .radio-row {
@@ -730,7 +875,7 @@ select.input {
   align-items: center;
   border-radius: 999px;
   display: inline-flex;
-  font-size: 12.5px;
+  font-size: 12px;
   font-weight: 500;
   gap: 6px;
   line-height: 1.5;
@@ -792,6 +937,13 @@ select.input {
   .status-active::before {
     animation: none;
   }
+
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 .task-view {
@@ -806,7 +958,7 @@ select.input {
   display: flex;
   gap: var(--s-4);
   justify-content: space-between;
-  padding-bottom: var(--s-4);
+  padding-bottom: var(--s-5);
 }
 
 .task-title {
@@ -844,8 +996,31 @@ select.input {
   align-items: stretch;
   display: grid;
   gap: var(--s-7);
-  grid-template-columns: minmax(0, 1fr) 296px;
-  padding-top: var(--s-5);
+  grid-template-columns: minmax(0, 1fr) 320px;
+  padding-top: var(--s-6);
+}
+
+/* While the seam is present the template is set inline; it carries the gaps itself. */
+.task-columns:has(.rail-seam) {
+  gap: 0;
+}
+
+.rail-seam {
+  cursor: col-resize;
+  flex: none;
+  position: relative;
+}
+
+.rail-seam::after {
+  border-left: 1px solid var(--n-200);
+  content: "";
+  inset: 0 auto 0 50%;
+  position: absolute;
+}
+
+.rail-seam:hover::after,
+.rail-seam:focus-visible::after {
+  border-color: var(--accent);
 }
 
 .task-main {
@@ -853,21 +1028,26 @@ select.input {
   flex-direction: column;
   gap: var(--s-6);
   min-width: 0;
+  /* Room to breathe off the seam; reset when the rail stacks below. */
+  padding-right: var(--s-4);
 }
 
 .task-rail {
-  border-left: 1px solid var(--n-200);
   display: flex;
   flex-direction: column;
   gap: var(--s-6);
   min-width: 0;
-  padding-left: var(--s-5);
+  padding-left: var(--s-4);
 }
 
 @media (max-width: 1000px) {
   .task-columns {
     gap: var(--s-6);
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .task-main {
+    padding-right: 0;
   }
 
   .task-rail {
@@ -922,7 +1102,7 @@ select.input {
 /* What the number is of. Directly under it, because apart from it it means nothing. */
 .result-context {
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: 12px;
   margin: var(--s-3) 0 0;
 }
 
@@ -1032,7 +1212,7 @@ select.input {
 .artifact-ext {
   color: var(--n-400);
   flex-shrink: 0;
-  font-size: 10.5px;
+  font-size: 11px;
   letter-spacing: 0.04em;
   margin-left: auto;
   text-transform: uppercase;
@@ -1136,7 +1316,7 @@ select.input {
 .log-view {
   color: var(--n-200);
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: 12px;
   line-height: 1.65;
   margin: 0;
   max-height: 520px;
@@ -1266,17 +1446,24 @@ select.input {
 }
 
 /* The config file and the command line are two different things in AISBench; a form that
-   runs them together is what made people set a field expecting the other to change. */
+   runs them together is what made people set a field expecting the other to change. Two
+   panels say the split; one shared grid inside each keeps the numbers on one line. */
 .param-group {
-  background: var(--n-25);
-  border: 1px solid var(--line);
+  background: var(--n-50);
+  border: 1px solid var(--n-200);
   border-radius: var(--r-lg);
-  margin-top: 16px;
-  padding: 16px 18px 18px;
+  margin-top: var(--s-3);
+  padding: var(--s-3) var(--s-4) var(--s-4);
+}
+
+.param-group .field-grid {
+  /* Wide enough that every number input of a group sits beside the others. */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  max-width: none;
 }
 
 .group-title {
-  color: var(--text);
+  color: var(--n-800);
   font-size: 13px;
   font-weight: 600;
   margin: 0 0 var(--s-1);
@@ -1288,4 +1475,778 @@ select.input {
 
 .checkbox-option .field-hint {
   margin: 0;
+}
+
+/* --- the datasets of one run ------------------------------------------------- */
+
+/* Rows, not cards: the run is the subject and each dataset is a line in its story, told
+   apart by a rule like the rail's rather than by a box of its own. */
+.dataset-progress {
+  margin-bottom: var(--s-5);
+}
+
+.ds-summary {
+  align-items: baseline;
+  display: flex;
+  gap: var(--s-3);
+  justify-content: space-between;
+}
+
+.ds-summary-counts {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-aggregate {
+  margin-top: var(--s-2);
+  max-width: none;
+}
+
+.ds-list {
+  list-style: none;
+  margin: var(--s-3) 0 0;
+  padding: 0;
+}
+
+.ds-item + .ds-item {
+  border-top: 1px solid var(--line);
+}
+
+.ds-row {
+  align-items: baseline;
+  background: none;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  display: grid;
+  font: inherit;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr) auto minmax(7ch, auto) minmax(96px, max-content);
+  padding: 13px 0;
+  text-align: left;
+  width: 100%;
+}
+
+.ds-row:hover .ds-name {
+  color: var(--accent-strong);
+}
+
+.ds-name {
+  color: var(--text);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-phase {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.ds-phase-inferring,
+.ds-phase-evaluating {
+  color: var(--accent-strong);
+}
+
+.ds-phase-failed {
+  color: var(--danger);
+}
+
+.ds-phase-finished {
+  color: var(--success);
+}
+
+/* A fixed numeric slot: the number grows, the row does not. */
+.ds-counts {
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  min-width: 7ch;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ds-bar {
+  align-self: center;
+  background: var(--n-150);
+  border-radius: 999px;
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  width: 100%;
+}
+
+.ds-bar-fill {
+  background: var(--accent);
+  border-radius: 999px;
+  display: block;
+  height: 100%;
+  transition: width 300ms ease;
+}
+
+.ds-phase-failed ~ .ds-bar .ds-bar-fill {
+  background: var(--danger);
+}
+
+.ds-score {
+  color: var(--text);
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ds-detail {
+  border-top: 1px dashed var(--line);
+  margin: 0 0 var(--s-3);
+  padding: 14px 0 16px;
+}
+
+.ds-detail-line {
+  color: var(--text-secondary);
+  font-size: 13px;
+  margin: 0 0 var(--s-1);
+}
+
+.ds-counters {
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 12px;
+  gap: var(--s-4);
+  margin: 0 0 var(--s-2);
+}
+
+.ds-counters > span {
+  color: var(--n-500);
+  letter-spacing: 0.04em;
+}
+
+.ds-counter-value {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+
+.ds-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-5) var(--s-6);
+  margin: 0 0 var(--s-3);
+}
+
+.ds-metric > dt {
+  margin: 0 0 2px;
+}
+
+.ds-metric > dd {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  margin: 0;
+}
+
+.ds-metric-unit {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.ds-log {
+  background: var(--n-0);
+}
+
+.ds-log .log-view {
+  max-height: 240px;
+}
+
+/* --- picking the datasets of a new job ---------------------------------------- */
+
+.ds-picker {
+  border: 0;
+  display: grid;
+  gap: 0 var(--s-6);
+  /* Several picks to scan, not one long column to walk down. */
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  margin: 0;
+  max-width: 880px;
+  padding: 0;
+}
+
+.ds-option {
+  align-items: baseline;
+  border-top: 1px solid var(--line);
+  cursor: pointer;
+  display: flex;
+  gap: var(--s-3);
+  padding: 7px 0;
+}
+
+.ds-option:first-child {
+  border-top: 0;
+}
+
+.ds-option input {
+  align-self: center;
+  margin: 0;
+}
+
+.ds-option-name {
+  font-size: 13px;
+}
+
+.ds-option-task {
+  color: var(--text-tertiary);
+  font-size: 12px;
+}
+
+.ds-option-warning {
+  color: var(--danger);
+  font-size: 12px;
+  margin-left: auto;
+}
+
+.ds-option.is-blocked {
+  color: var(--n-300);
+  cursor: default;
+}
+
+.ds-variants {
+  display: grid;
+  gap: var(--s-3) var(--s-4);
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  margin-top: var(--s-3);
+  max-width: 880px;
+}
+
+.ds-variant .ds-option-name {
+  display: block;
+  margin-bottom: 4px;
+}
+
+.form-step-count {
+  color: var(--text-secondary);
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  margin-left: var(--s-2);
+  text-transform: none;
+}
+
+/* A label only assistive technology reads; the visible one nearby already says it. */
+.visually-hidden {
+  clip-path: inset(50%);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+/* --- per-sample records of a finished dataset -------------------------------- */
+
+.ds-samples {
+  margin: 0 0 var(--s-2);
+}
+
+.ds-samples-head {
+  align-items: baseline;
+  display: flex;
+  gap: var(--s-3);
+  justify-content: space-between;
+  margin: var(--s-2) 0 var(--s-2);
+}
+
+.ds-sample-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  table-layout: fixed;
+  width: 100%;
+}
+
+.ds-col-id {
+  width: 44px;
+}
+
+.ds-col-verdict {
+  width: 52px;
+}
+
+.ds-col-ref {
+  width: 26%;
+}
+
+.ds-sample-table th {
+  border-bottom: 1px solid var(--line);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  padding: 6px 10px 6px 0;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.ds-sample-table td {
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  padding: 9px 10px 9px 0;
+  vertical-align: top;
+}
+
+.ds-sample-clamp {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-sample-table tbody tr {
+  cursor: pointer;
+}
+
+.ds-sample-table tbody tr:hover td {
+  background: var(--n-25);
+}
+
+/* Answers clamp to two lines; the row opens for the whole record. */
+.ds-sample-answer {
+  max-width: 360px;
+  overflow: hidden;
+}
+
+.ds-verdict {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ds-verdict-correct {
+  color: var(--success);
+}
+
+.ds-verdict-wrong {
+  color: var(--danger);
+}
+
+.ds-sample-detail-row td {
+  background: var(--n-25);
+  cursor: default;
+}
+
+.ds-sample-block {
+  margin: 4px 0;
+}
+
+.ds-sample-block pre {
+  font-size: 12px;
+  margin: 6px 0 0;
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ds-score-item {
+  white-space: nowrap;
+}
+
+.ds-score-name {
+  color: var(--text-tertiary);
+  font-size: 11px;
+  letter-spacing: 0.05em;
+}
+
+.ds-score-sep {
+  color: var(--n-300);
+}
+
+.ds-score-counts {
+  color: var(--text-tertiary);
+}
+
+/* The four records of one sample, side by side: comparing them is the point. The seams
+   between them are draggable, so a long prompt can borrow an answer's column. */
+.ds-sample-grid {
+  display: grid;
+  gap: var(--s-3);
+}
+
+.ds-sample-block-wrap {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.ds-sample-block {
+  flex: 1;
+  min-width: 0;
+}
+
+.col-seam {
+  cursor: col-resize;
+  flex: none;
+  position: relative;
+  width: 9px;
+}
+
+.col-seam::after {
+  border-left: 1px solid var(--line);
+  content: "";
+  inset: 0 auto 0 4px;
+  position: absolute;
+}
+
+.col-seam:hover::after {
+  border-color: var(--accent);
+}
+
+.ds-samples-tools {
+  align-items: center;
+  display: flex;
+  gap: var(--s-3);
+}
+
+.chip {
+  background: none;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  padding: 2px 10px;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.chip-active {
+  background: var(--accent-weak);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+/* --- the scoreboard a finished run leads with -------------------------------- */
+
+/* One big number per dataset: the first thing the eye lands on is the answer. */
+.ds-scoreboard {
+  margin-bottom: var(--s-6);
+}
+
+.ds-scoreboard > .eyebrow {
+  margin: 0 0 var(--s-2);
+}
+
+.ds-scoreboard-grid {
+  display: grid;
+  gap: var(--s-5) var(--s-7);
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+}
+
+.ds-hero {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.ds-hero-name {
+  color: var(--text-secondary);
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-hero-value {
+  color: var(--text);
+  font-size: 36px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.ds-hero-phase {
+  font-size: 20px;
+  font-weight: 600;
+  line-height: 1.9;
+}
+
+.ds-hero-meta {
+  color: var(--text-tertiary);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- the parameter lists in the rail ------------------------------------------ */
+
+/* Every setting the run used, one line each: name left, effective value right. */
+.param-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.param-row {
+  border-top: 1px solid var(--line);
+  display: grid;
+  gap: var(--s-3);
+  grid-template-columns: minmax(0, 1fr) auto;
+  padding: 6px 0;
+}
+
+.param-name {
+  color: var(--n-500);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.param-value {
+  color: var(--text);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  /* A value is read to its end, not to the column's end: wrap instead of ellipsize. */
+  overflow-wrap: anywhere;
+  text-align: right;
+  white-space: normal;
+}
+
+.param-value.is-changed {
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.param-value.is-unset {
+  color: var(--n-400);
+}
+
+/* --- the dataset dropdown ----------------------------------------------------- */
+
+.combobox {
+  max-width: 620px;
+  position: relative;
+}
+
+.combobox-control {
+  display: flex;
+  position: relative;
+}
+
+.combobox-control .input {
+  padding-right: 34px;
+  width: 100%;
+}
+
+.combobox-toggle {
+  align-items: center;
+  color: var(--n-500);
+  display: flex;
+  font-size: 12px;
+  padding: 0 10px;
+  pointer-events: none;
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+}
+
+.combobox-panel {
+  background: var(--n-0);
+  border: 1px solid var(--line);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  left: 0;
+  max-height: 264px;
+  overflow-y: auto;
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 30;
+}
+
+.combobox-empty {
+  color: var(--n-500);
+  font-size: 13px;
+  margin: 0;
+  padding: 10px 12px;
+}
+
+.combobox-option {
+  align-items: baseline;
+  background: none;
+  border: 0;
+  color: var(--text);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  gap: var(--s-3);
+  padding: 8px 12px;
+  text-align: left;
+  width: 100%;
+}
+
+.combobox-option:hover {
+  background: var(--n-50);
+}
+
+.combobox-option.is-selected {
+  background: var(--accent-weak);
+}
+
+.combobox-option.is-blocked {
+  color: var(--n-400);
+  cursor: default;
+}
+
+.combobox-option.is-blocked:hover {
+  background: none;
+}
+
+.combobox-check {
+  color: var(--accent-strong);
+  margin-left: auto;
+}
+
+.chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+}
+
+.chip-token {
+  align-items: center;
+  background: var(--accent-weak);
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--accent-strong);
+  display: inline-flex;
+  font-size: 12.5px;
+  gap: 6px;
+  padding: 2px 6px 2px 10px;
+}
+
+.chip-token button {
+  background: none;
+  border: 0;
+  border-radius: 50%;
+  color: inherit;
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px;
+}
+
+.chip-token button:hover {
+  background: rgb(37 99 235 / 12%);
+}
+
+/* Inference is done and the run is in a stage without a denominator: the bar moves
+   instead of pretending a number. */
+.progress-track.is-indeterminate .progress-fill {
+  animation: indeterminate-slide 1.4s ease-in-out infinite;
+  width: 34%;
+}
+
+@keyframes indeterminate-slide {
+  0% {
+    margin-left: -34%;
+  }
+
+  100% {
+    margin-left: 100%;
+  }
+}
+
+/* --- the datasets as a table with sheet tabs beneath --------------------------- */
+
+/* The overview is a table the eye scans; the depth lives in one sheet at a time. */
+.ds-table {
+  border-collapse: collapse;
+  font-size: 13px;
+  margin-top: var(--s-3);
+  table-layout: fixed;
+  width: 100%;
+}
+
+.ds-table th {
+  border-bottom: 1px solid var(--line);
+  color: var(--text-tertiary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  padding: 6px 12px 6px 0;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.ds-table td {
+  border-bottom: 1px solid var(--line);
+  overflow: hidden;
+  padding: 10px 12px 10px 0;
+  vertical-align: middle;
+}
+
+.ds-table td.ds-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ds-table tbody tr.is-selected td {
+  background: var(--n-25);
+}
+
+.ds-col-actions {
+  width: 84px;
+}
+
+.ds-progress-cell {
+  align-items: center;
+  display: flex;
+  gap: var(--s-3);
+}
+
+.ds-progress-cell .ds-bar {
+  flex: 1;
+  max-width: 220px;
+}
+
+/* Sheet tabs: one dataset's depth at a time, flipped without losing the page. */
+.sheet-tabs {
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: var(--s-2);
+  margin-top: var(--s-4);
+  overflow-x: auto;
+}
+
+.sheet-tab {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--n-500);
+  cursor: pointer;
+  font-size: 12.5px;
+  padding: 6px 10px;
+  white-space: nowrap;
+}
+
+.sheet-tab:hover {
+  color: var(--text);
+}
+
+.sheet-tab.is-active {
+  border-bottom-color: var(--accent);
+  color: var(--accent-strong);
+  font-weight: 600;
+}
+
+.ds-sheets .ds-detail {
+  border-top: 0;
+  margin: 0 0 var(--s-2);
 }

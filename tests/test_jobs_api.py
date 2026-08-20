@@ -9,6 +9,7 @@ from starlette.testclient import TestClient
 
 from aisbench_web.app import create_app
 from aisbench_web.db import Database
+from aisbench_web.jobs.dataset_progress import DatasetStatus
 from aisbench_web.jobs.states import JobStatus
 from aisbench_web.repositories.jobs import JobRepository
 from aisbench_web.settings import Settings
@@ -21,7 +22,7 @@ ENDPOINT_PAYLOAD = {
 }
 MODEL_LISTING = {"data": [{"id": "Qwen3-32B"}]}
 ACCURACY_JOB = {
-    "dataset_id": "gsm8k",
+    "dataset_ids": ["gsm8k"],
     "mode": "accuracy",
     "parameters": {"cli": {"num_prompts": 8, "max_num_workers": 1}},
 }
@@ -186,7 +187,7 @@ async def test_performance_parameters_are_validated_separately(owner) -> None:
 
 @pytest.mark.asyncio
 async def test_a_dataset_without_a_config_for_the_mode_is_refused(owner) -> None:
-    response = await submit(owner, dataset_id="mmlu", mode="performance")
+    response = await submit(owner, dataset_ids=["mmlu"], mode="performance")
 
     assert response.status_code == 409
     assert "performance" in response.json()["detail"]
@@ -194,10 +195,78 @@ async def test_a_dataset_without_a_config_for_the_mode_is_refused(owner) -> None
 
 @pytest.mark.asyncio
 async def test_an_uninstalled_dataset_is_refused(owner) -> None:
-    response = await submit(owner, dataset_id="synthetic")
+    response = await submit(owner, dataset_ids=["synthetic"])
 
     assert response.status_code == 409
     assert "install" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_a_job_can_combine_several_datasets(owner) -> None:
+    response = await submit(owner, dataset_ids=["gsm8k", "mmlu"])
+
+    assert response.status_code == 201
+    body = response.json()
+    # The display column carries the first dataset; the snapshot carries the rest.
+    assert body["dataset"]["name"] == "gsm8k"
+    assert body["name"] == "gsm8k +1"
+    stored = owner.jobs.get_for_owner(body["id"], owner.user_id)
+    entries = stored.dataset_snapshot["datasets"]
+    assert [entry["name"] for entry in entries] == ["gsm8k", "mmlu"]
+    assert entries[0]["abbr"] == "gsm8k"
+
+
+@pytest.mark.asyncio
+async def test_a_created_job_already_lists_its_datasets_as_queued(owner) -> None:
+    """The page opens straight after submitting; the rows must already be there."""
+    body = (await submit(owner, dataset_ids=["gsm8k", "mmlu"])).json()
+
+    detail = (await owner.client.get(f"/api/jobs/{body['id']}")).json()
+
+    assert [(row["name"], row["phase"]) for row in detail["datasets"]] == [
+        ("gsm8k", "queued"),
+        ("mmlu", "queued"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_a_dataset_the_job_does_not_include_cannot_pick_its_config(owner) -> None:
+    response = await submit(owner, config_names={"mmlu": "mmlu_gen_5_shot_chat_prompt"})
+
+    assert response.status_code == 409
+    assert "does not include" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_the_same_config_cannot_be_chosen_twice(owner) -> None:
+    """Two catalog entries can point at one config file; running it twice helps nobody."""
+    response = await submit(
+        owner,
+        dataset_ids=["gsm8k", "gsm8k"],
+        config_names={"gsm8k": "gsm8k_gen_4_shot_cot_chat_prompt"},
+    )
+
+    assert response.status_code == 201  # a repeated id is the same choice, not two
+
+
+@pytest.mark.asyncio
+async def test_detail_lists_dataset_rows_in_the_order_the_job_was_configured(owner) -> None:
+    job_id = (await submit(owner, dataset_ids=["gsm8k", "mmlu"])).json()["id"]
+
+    owner.jobs.replace_dataset_progress(
+        job_id,
+        [
+            DatasetStatus(dataset="mmlu", phase="inferring", completed=1, total=4),
+            DatasetStatus(dataset="gsm8k", phase="finished", completed=8, total=8),
+        ],
+    )
+
+    detail = (await owner.client.get(f"/api/jobs/{job_id}")).json()
+    assert [(row["name"], row["phase"]) for row in detail["datasets"]] == [
+        ("gsm8k", "finished"),
+        ("mmlu", "inferring"),
+    ]
+    assert detail["datasets"][1]["completed"] == 1
 
 
 # --- listing and ownership ---------------------------------------------------
@@ -315,6 +384,110 @@ async def test_logs_are_owner_scoped(client_factory: ClientFactory, owner) -> No
     bob = await client_factory("bob")
 
     assert (await bob.get(f"/api/jobs/{job_id}/logs")).status_code == 404
+
+
+# --- one dataset's own log ----------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_datasets_log_is_served_by_the_name_progress_reports(owner, settings) -> None:
+    job_id = (await submit(owner)).json()["id"]
+    job = owner.jobs.get_for_owner(job_id, owner.user_id)
+    run_dir = settings.jobs_dir / job.output_dir / "20260819_000000"
+    run_dir.mkdir(parents=True)
+    (run_dir / "infer.log").write_text("inferring gsm8k\n", encoding="utf-8")
+    owner.jobs.replace_dataset_progress(
+        job_id,
+        [
+            DatasetStatus(
+                dataset="gsm8k",
+                phase="inferring",
+                completed=3,
+                total=8,
+                log_path="outputs/20260819_000000/infer.log",
+            )
+        ],
+    )
+
+    response = await owner.client.get(f"/api/jobs/{job_id}/datasets/gsm8k/logs")
+
+    assert response.json() == {"offset": 16, "text": "inferring gsm8k\n"}
+
+
+@pytest.mark.asyncio
+async def test_a_dataset_name_is_matched_not_turned_into_a_path(owner) -> None:
+    """The name addresses a stored row; a traversal attempt simply matches nothing."""
+    job_id = (await submit(owner)).json()["id"]
+
+    assert (
+        await owner.client.get(f"/api/jobs/{job_id}/datasets/..%2F..%2Fetc%2Fpasswd/logs")
+    ).status_code == 404
+    # The queued row creation seeded carries no log yet, so the name matches and the
+    # log reads empty — the run has not produced one.
+    assert (
+        await owner.client.get(f"/api/jobs/{job_id}/datasets/gsm8k/logs")
+    ).json() == {"offset": 0, "text": ""}
+
+
+@pytest.mark.asyncio
+async def test_a_dataset_without_a_log_reads_as_empty(owner) -> None:
+    job_id = (await submit(owner)).json()["id"]
+    owner.jobs.replace_dataset_progress(
+        job_id, [DatasetStatus(dataset="gsm8k", phase="inferring")]
+    )
+
+    response = await owner.client.get(f"/api/jobs/{job_id}/datasets/gsm8k/logs")
+
+    assert response.json() == {"offset": 0, "text": ""}
+
+
+@pytest.mark.asyncio
+async def test_a_datasets_samples_are_paged_from_the_evaluator_details(
+    owner, settings
+) -> None:
+    import json as json_module
+
+    job_id = (await submit(owner)).json()["id"]
+    job = owner.jobs.get_for_owner(job_id, owner.user_id)
+    results_dir = settings.jobs_dir / job.output_dir / "20260819_000000" / "results" / "qwen"
+    results_dir.mkdir(parents=True)
+    (results_dir / "gsm8k.json").write_text(
+        json_module.dumps(
+            {
+                "accuracy": 50.0,
+                "details": {
+                    str(index): {
+                        "prompt": [{"role": "HUMAN", "prompt": f"Question {index}"}],
+                        "origin_prediction": f"raw {index}",
+                        "predictions": f"answer {index}",
+                        "references": f"gold {index}",
+                        "correct": [True],
+                    }
+                    for index in range(3)
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    owner.jobs.replace_dataset_progress(
+        job_id, [DatasetStatus(dataset="gsm8k", phase="finished")]
+    )
+
+    page = await owner.client.get(f"/api/jobs/{job_id}/datasets/gsm8k/samples?limit=2")
+
+    body = page.json()
+    assert body["source"] == "eval_details"
+    assert body["total"] == 3
+    assert [sample["id"] for sample in body["samples"]] == ["0", "1"]
+
+    rest = await owner.client.get(
+        f"/api/jobs/{job_id}/datasets/gsm8k/samples?offset=2&limit=2"
+    )
+    assert [sample["id"] for sample in rest.json()["samples"]] == ["2"]
+    # A name no row carries is not a dataset of this job, whatever it spells.
+    assert (
+        await owner.client.get(f"/api/jobs/{job_id}/datasets/..%2Fetc/logs")
+    ).status_code == 404
 
 
 @pytest.mark.asyncio

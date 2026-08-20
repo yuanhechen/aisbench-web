@@ -128,6 +128,27 @@ def test_config_names_are_read_for_the_options_they_encode(aisbench_configs: Pat
     assert (zero_shot.shots, zero_shot.chain_of_thought, zero_shot.chat_prompt) == (0, True, False)
 
 
+def test_a_computed_abbr_is_not_offered_as_the_datasets_name(
+    aisbench_configs: Path,
+) -> None:
+    """`abbr='GPQA_' + split` builds its name at runtime; the fragment names nothing."""
+    root = aisbench_configs / "benchmark" / "configs" / "datasets" / "gpqa"
+    root.mkdir()
+    (root / "gpqa_gen.py").write_text(
+        "gpqa_datasets = [dict(\n"
+        "    abbr='GPQA_' + split,\n"
+        "    path='ais_bench/datasets/gpqa',\n"
+        ")]\n",
+        encoding="utf-8",
+    )
+
+    entries = {entry.id: entry for entry in load_catalog()}
+
+    # A whole literal is the name AISBench will report; anything else reports nothing.
+    assert entries["gsm8k"].configs[0].abbr == "gsm8k"
+    assert all(config.abbr == "" for config in entries["gpqa"].configs)
+
+
 def test_every_download_source_is_checksum_pinned() -> None:
     """An unpinned download is a silent swap; an unverified target installs into nowhere."""
     for directory, source in load_download_sources().items():

@@ -42,6 +42,36 @@ export interface ProbeResult {
   runnable: boolean;
 }
 
+export type DatasetPhase =
+  | "queued"
+  | "loading"
+  | "inferring"
+  | "writing_cache"
+  | "evaluating"
+  | "finished"
+  | "failed";
+
+export interface DatasetMetricValue {
+  value: number | null;
+  text_value: string | null;
+  unit: string | null;
+}
+
+/** One dataset's own progress through the run, and its scores once it has them. */
+export interface DatasetProgress {
+  name: string;
+  phase: DatasetPhase;
+  completed: number | null;
+  total: number | null;
+  rate: string | null;
+  counters: Record<string, number> | null;
+  log_available: boolean;
+  metrics: Record<string, DatasetMetricValue>;
+  correct_count: number | null;
+  total_count: number | null;
+  started_at: string | null;
+}
+
 export interface Job {
   id: string;
   name: string;
@@ -51,6 +81,7 @@ export interface Job {
   progress: { completed: number; total: number } | null;
   model: { name: string; model_name: string; base_url: string; config_name: string };
   dataset: { id: string; name: string; config_name: string };
+  datasets: DatasetProgress[];
   parameters: Record<string, unknown>;
   exit_code: number | null;
   error_code: string | null;

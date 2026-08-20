@@ -17,6 +17,10 @@ MODEL_CONFIG_ROOT = "ais_bench.benchmark.configs.models"
 # `path='ais_bench/datasets/gsm8k'` or `path="ais_bench/datasets/ceval/formal_ceval"`
 DATA_PATH = re.compile(r"""path\s*=\s*['"]([^'"]*ais_bench/datasets/[^'"]*)['"]""")
 DATASET_SYMBOL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*_datasets)\s*=", re.MULTILINE)
+# `abbr='ARC-e'`: the name AISBench itself reports a dataset under, in tasks and results.
+# Only whole literals count: some configs build the abbr (`abbr='GPQA_' + split`), and the
+# fragment a loose match would catch names a dataset AISBench will never report.
+DATASET_ABBR = re.compile(r"""abbr\s*=\s*['"]([^'"]+)['"]\s*[,)]""")
 # `<name>_gen.py` files re-export one specific config: `from .x_gen_5_shot_str import x_datasets`.
 ALIAS_IMPORT = re.compile(
     r"from\s+\.([A-Za-z_][A-Za-z0-9_]*)\s+import\s+([A-Za-z_][A-Za-z0-9_]*_datasets)"
@@ -46,6 +50,8 @@ class DatasetConfig:
     chat_prompt: bool
     #: "gen" generates an answer, "ppl" scores options by perplexity; empty when unstated.
     method: str = ""
+    #: The abbr AISBench reports this dataset under; empty when the config states none.
+    abbr: str = ""
     #: The config this one re-exports, for the `<name>_gen.py` shortcut files.
     alias_of: str = ""
 
@@ -71,7 +77,9 @@ class ScannedDataset:
         return tuple(config for config in self.configs if config.mode == mode)
 
 
-def _describe(name: str, package: str, symbol: str, alias_of: str = "") -> DatasetConfig:
+def _describe(
+    name: str, package: str, symbol: str, alias_of: str = "", abbr: str = ""
+) -> DatasetConfig:
     shots = SHOTS.search(name)
     parts = name.split("_")
     return DatasetConfig(
@@ -84,6 +92,7 @@ def _describe(name: str, package: str, symbol: str, alias_of: str = "") -> Datas
         chain_of_thought="_cot" in name and "_noncot" not in name,
         chat_prompt="chat" in name,
         method=next((part for part in parts if part in METHODS), ""),
+        abbr=abbr,
         alias_of=alias_of,
     )
 
@@ -131,7 +140,15 @@ def scan_dataset_configs(ais_bench_package: Path) -> tuple[ScannedDataset, ...]:
             symbol = DATASET_SYMBOL.search(source)
             alias = ALIAS_IMPORT.search(source)
             if symbol is not None:
-                configs.append(_describe(config_file.stem, package_dir.name, symbol.group(1)))
+                abbr = DATASET_ABBR.search(source)
+                configs.append(
+                    _describe(
+                        config_file.stem,
+                        package_dir.name,
+                        symbol.group(1),
+                        abbr="" if abbr is None else abbr.group(1),
+                    )
+                )
             elif alias is not None:
                 # A shortcut file the CLI accepts by name; it runs the config it re-exports.
                 configs.append(
@@ -141,6 +158,7 @@ def scan_dataset_configs(ais_bench_package: Path) -> tuple[ScannedDataset, ...]:
                 continue
             paths = paths or _declared_paths(source)
         if configs:
+            _fill_alias_abbrs(configs)
             datasets.append(
                 ScannedDataset(
                     id=package_dir.name,
@@ -150,6 +168,23 @@ def scan_dataset_configs(ais_bench_package: Path) -> tuple[ScannedDataset, ...]:
                 )
             )
     return tuple(datasets)
+
+
+def _fill_alias_abbrs(configs: list[DatasetConfig]) -> None:
+    """An alias runs its target's config, so it reports the target's abbr too."""
+    by_name = {config.name: config for config in configs}
+    for config in configs:
+        if config.abbr or not config.alias_of:
+            continue
+        target = by_name.get(config.alias_of)
+        if target is not None and target.abbr:
+            configs[configs.index(config)] = _describe(
+                config.name,
+                config.package,
+                config.symbol,
+                config.alias_of,
+                target.abbr,
+            )
 
 
 # A model config declares the class that will drive the endpoint and how it will call it.

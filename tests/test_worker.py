@@ -20,6 +20,7 @@ from aisbench_web.settings import Settings
 
 FAKE_AIS_BENCH = Path(__file__).parent / "fake_ais_bench.py"
 GSM8K_IMPORT = "ais_bench.benchmark.configs.datasets.gsm8k.gsm8k_gen_4_shot_cot_chat_prompt"
+MMLU_IMPORT = "ais_bench.benchmark.configs.datasets.mmlu.mmlu_gen_5_shot_chat_prompt"
 API_KEY = "secret-model-token"
 
 
@@ -152,6 +153,102 @@ def harness(tmp_path: Path, database: Database, settings: Settings) -> Harness:
 )
 def test_progress_is_read_or_reported_as_unknown(line: str, expected) -> None:
     assert parse_progress(line) == expected
+
+
+def test_a_run_whose_tasks_all_failed_is_a_failed_job_not_an_empty_success(
+    harness: Harness,
+) -> None:
+    """AISBench finishes its workflow with exit 0 even when every task died; the results,
+    or their absence, are what decide how the job reads."""
+    harness.set_scenario("taskfail")
+    job = harness.jobs.create(
+        owner_id=harness.owner,
+        model_endpoint_id="endpoint-1",
+        dataset_id="gsm8k",
+        mode="accuracy",
+        parameters={"cli": {"num_prompts": 8, "max_num_workers": 1}},
+        model_snapshot={
+            "abbr": "job-model",
+            "base_url": "http://127.0.0.1:8001/v1",
+            "model_name": "Qwen3-32B",
+            "encrypted_api_key": harness.encrypted_api_key,
+        },
+        dataset_snapshot={
+            "datasets": [
+                {
+                    "id": "gsm8k",
+                    "name": "gsm8k",
+                    "config_name": "gsm8k_gen_4_shot_cot_chat_prompt",
+                    "config_import": GSM8K_IMPORT,
+                    "dataset_symbol": "gsm8k_datasets",
+                    "abbr": "gsm8k",
+                }
+            ]
+        },
+    )
+
+    harness.worker.run_pending_once()
+    finished = harness.wait_for(job.id, [JobStatus.FAILED])
+
+    assert finished.error_code == "no_results"
+    rows = harness.jobs.list_dataset_progress(job.id)
+    # The dash row in the summary is not a result; the row keeps the failure it lived.
+    assert [(row.dataset, row.phase, row.metrics) for row in rows] == [
+        ("gsm8k", "failed", None)
+    ]
+
+
+def test_a_multi_dataset_run_reports_each_dataset_and_its_result(harness: Harness) -> None:
+    """The whole story the detail page tells: rows appear, progress, then the scores."""
+    job = harness.jobs.create(
+        owner_id=harness.owner,
+        model_endpoint_id="endpoint-1",
+        dataset_id="gsm8k",
+        mode="accuracy",
+        parameters={"cli": {"num_prompts": 8, "max_num_workers": 1}},
+        model_snapshot={
+            "abbr": "job-model",
+            "base_url": "http://127.0.0.1:8001/v1",
+            "model_name": "Qwen3-32B",
+            "encrypted_api_key": harness.encrypted_api_key,
+        },
+        dataset_snapshot={
+            "datasets": [
+                {
+                    "id": "gsm8k",
+                    "name": "gsm8k",
+                    "config_name": "gsm8k_gen_4_shot_cot_chat_prompt",
+                    "config_import": GSM8K_IMPORT,
+                    "dataset_symbol": "gsm8k_datasets",
+                    "abbr": "gsm8k",
+                },
+                {
+                    "id": "mmlu",
+                    "name": "mmlu",
+                    "config_name": "mmlu_gen_5_shot_chat_prompt",
+                    "config_import": MMLU_IMPORT,
+                    "dataset_symbol": "mmlu_datasets",
+                    "abbr": "mmlu",
+                },
+            ]
+        },
+    )
+
+    harness.worker.run_pending_once()
+    finished = harness.wait_for(job.id, [JobStatus.SUCCEEDED])
+
+    assert finished.status == JobStatus.SUCCEEDED
+    rows = harness.jobs.list_dataset_progress(job.id)
+    by_name = {row.dataset: row for row in rows}
+    assert sorted(by_name) == ["gsm8k", "mmlu"]
+    for row in rows:
+        assert row.phase == "finished"
+        assert (row.completed, row.total) == (8, 8)
+        assert (row.correct_count, row.total_count) == (7, 8)
+        assert row.metrics["accuracy"].get("value") == 87.5
+        assert row.log_path and (
+            harness.settings.jobs_dir / job.id / row.log_path
+        ).is_file()
 
 
 # --- environment -------------------------------------------------------------

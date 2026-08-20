@@ -13,6 +13,7 @@ from aisbench_web.jobs.results import (
     parse_accuracy,
     parse_performance,
     parse_results,
+    read_dataset_samples,
     safe_artifact_path,
 )
 from aisbench_web.jobs.states import JobStatus
@@ -78,6 +79,59 @@ def test_accuracy_summary_is_normalized(tmp_path: Path) -> None:
     result = parse_accuracy(tmp_path)
 
     assert result.metrics["gsm8k.accuracy"].value == 82.5
+    assert result.per_dataset["gsm8k"]["accuracy"].value == 82.5
+
+
+def test_correct_and_total_come_from_the_evaluator_details(tmp_path: Path) -> None:
+    """Most evaluators write accuracy plus per-sample details, not the count pair."""
+    write_accuracy_output(tmp_path)
+    details = output_results_path(tmp_path)
+    details.parent.mkdir(parents=True, exist_ok=True)
+    details.write_text(
+        json.dumps(
+            {
+                "accuracy": 50.0,
+                "details": {
+                    "0": {"correct": [True]},
+                    "1": {"correct": [True]},
+                    "2": {"correct": []},
+                    "3": {"correct": False},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_accuracy(tmp_path)
+
+    assert result.counts["gsm8k"] == (2, 4)
+
+
+def test_an_evaluator_that_flags_nothing_reports_no_pair(tmp_path: Path) -> None:
+    """ARC's evaluator leaves every `correct` null; a 0/N beside a real accuracy would
+    contradict it, so the pair stays unreported and the score stands alone."""
+    write_accuracy_output(tmp_path)
+    details = output_results_path(tmp_path)
+    details.parent.mkdir(parents=True, exist_ok=True)
+    details.write_text(
+        json.dumps(
+            {
+                "accuracy": 75.0,
+                "details": {str(index): {"correct": None} for index in range(8)},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = parse_accuracy(tmp_path)
+
+    # The score the CSV recorded still stands; only the fabricated pair is gone.
+    assert result.counts == {}
+    assert result.metrics["gsm8k.accuracy"].value == 82.5
+
+
+def output_results_path(output_dir: Path) -> Path:
+    return output_dir / RUN_DIR / "results" / "qwen" / "gsm8k.json"
 
 
 def test_accuracy_reads_the_newest_run(tmp_path: Path) -> None:
@@ -189,6 +243,89 @@ def test_parse_results_routes_by_mode(tmp_path: Path) -> None:
 
 
 # --- artifacts ---------------------------------------------------------------
+
+
+# --- per-sample preview --------------------------------------------------------
+
+
+def write_samples_output(output_dir: Path, *, details: bool, count: int = 3) -> None:
+    """The two files a finished run leaves per dataset, in the shapes AISBench writes."""
+    run = output_dir / RUN_DIR
+    predictions = run / "predictions" / "qwen"
+    predictions.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for index in range(count):
+        lines.append(
+            json.dumps(
+                {
+                    "data_abbr": "gsm8k",
+                    "id": index,
+                    "success": True,
+                    "origin_prompt": [{"role": "HUMAN", "prompt": f"Question {index}"}],
+                    "prediction": f"raw model answer {index}",
+                    "gold": f"gold {index}",
+                }
+            )
+        )
+    (predictions / "gsm8k.jsonl").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    if details:
+        results = run / "results" / "qwen"
+        results.mkdir(parents=True, exist_ok=True)
+        (results / "gsm8k.json").write_text(
+            json.dumps(
+                {
+                    "accuracy": 66.6,
+                    "details": {
+                        str(index): {
+                            "prompt": [{"role": "HUMAN", "prompt": f"Question {index}"}],
+                            "origin_prediction": f"raw model answer {index}",
+                            "predictions": f"answer: {index}",
+                            "references": f"gold {index}",
+                            "correct": [index % 2 == 0],
+                        }
+                        for index in range(count)
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+
+def test_samples_prefer_the_evaluators_details(tmp_path: Path) -> None:
+    write_samples_output(tmp_path, details=True)
+
+    read = read_dataset_samples(tmp_path, "qwen", "gsm8k")
+
+    assert read.source == "eval_details"
+    assert read.total == 3
+    first = read.samples[0]
+    assert first.prompt == "[HUMAN] Question 0"
+    assert first.origin_prediction == "raw model answer 0"
+    assert first.prediction == "answer: 0"
+    assert first.reference == "gold 0"
+    assert first.correct is True
+    assert read.samples[1].correct is False
+
+
+def test_samples_fall_back_to_predictions_without_details(tmp_path: Path) -> None:
+    """Without --dump-eval-details the answers are still there; only the verdict is not."""
+    write_samples_output(tmp_path, details=False)
+
+    read = read_dataset_samples(tmp_path, "qwen", "gsm8k")
+
+    assert read.source == "predictions"
+    assert read.total == 3
+    first = read.samples[0]
+    assert first.prediction == "raw model answer 0"
+    assert first.reference == "gold 0"
+    assert first.correct is None
+
+
+def test_samples_when_neither_file_exists(tmp_path: Path) -> None:
+    read = read_dataset_samples(tmp_path, "qwen", "gsm8k")
+
+    assert read.source == "none"
+    assert read.samples == []
 
 
 def test_artifact_path_cannot_escape_job_directory(tmp_path: Path) -> None:

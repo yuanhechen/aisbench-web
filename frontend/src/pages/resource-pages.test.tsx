@@ -93,6 +93,21 @@ function renderAt(path: string) {
   return render(<App initialUser={ALICE} initialPath={path} />);
 }
 
+/** Datasets are picked from a dropdown: open it, click an option, keep it open for more. */
+async function pickDatasets(user: ReturnType<typeof userEvent.setup>, names: string[]) {
+  const box = await screen.findByLabelText("数据集");
+  await user.click(box);
+  for (const name of names) {
+    await user.click(screen.getByRole("option", { name: new RegExp(name) }));
+  }
+  return box;
+}
+
+/** The variant select of one picked dataset, labelled by the dataset it belongs to. */
+function variantSelect(dataset: string): HTMLElement {
+  return screen.getByRole("combobox", { name: new RegExp(dataset) });
+}
+
 // The real config files do not declare the same fields, and neither do these.
 const MODEL_CONFIGS = [
   {
@@ -149,7 +164,7 @@ describe("new evaluation", () => {
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
     await user.click(screen.getByRole("radio", { name: "性能评测" }));
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.clear(screen.getByLabelText("--num-prompts"));
     await user.type(screen.getByLabelText("--num-prompts"), "32");
     await user.click(screen.getByRole("button", { name: "提交评测" }));
@@ -157,9 +172,10 @@ describe("new evaluation", () => {
     await waitFor(() => expect(submitted).not.toBeNull());
     expect(submitted).toMatchObject({
       model_endpoint_id: "model-1",
-      dataset_id: "gsm8k",
+      dataset_ids: ["gsm8k"],
       mode: "performance",
-      config_name: "gsm8k_gen_0_shot_cot_str_perf",
+      // No variant was chosen, so the mode's own default runs; the body says nothing.
+      config_names: {},
       parameters: { cli: { num_prompts: 32 } },
     });
   });
@@ -176,7 +192,7 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.clear(screen.getByLabelText("--max-num-workers"));
     await user.type(screen.getByLabelText("--max-num-workers"), "4");
     await user.click(screen.getByRole("button", { name: "提交评测" }));
@@ -190,13 +206,14 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
 
     // "gen", "4_shot", "cot" and "chat" are in the file name; repeating them adds nothing.
-    const option = within(screen.getByLabelText("评测配置")).getByRole("option", {
-      name: "gsm8k_gen_0_shot_cot_str",
-    });
-    expect(option).toBeInTheDocument();
+    expect(
+      within(variantSelect("gsm8k")).getByRole("option", {
+        name: "gsm8k_gen_0_shot_cot_str",
+      }),
+    ).toBeInTheDocument();
 
     // Full names, sorted flat: the family prefix groups them without a heading repeating it.
     const models = screen.getByLabelText("模型配置");
@@ -219,7 +236,7 @@ describe("new evaluation", () => {
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
     await user.selectOptions(screen.getByLabelText("模型配置"), "vllm_api_stream_chat");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     await waitFor(() => expect(submitted.model_config_name).toBe("vllm_api_stream_chat"));
@@ -237,7 +254,7 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     await waitFor(() => expect(submitted.model_config_name).toBeNull());
@@ -248,9 +265,9 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
 
-    const configs = screen.getByLabelText("评测配置");
+    const configs = variantSelect("gsm8k");
     // The file name is the whole label: every attribute it could carry is already in it.
     expect(
       within(configs).getByRole("option", { name: "gsm8k_gen_4_shot_cot_chat_prompt" }),
@@ -266,7 +283,8 @@ describe("new evaluation", () => {
     expect(within(configs).queryAllByRole("option")).toHaveLength(3);
 
     await user.click(screen.getByRole("radio", { name: "性能评测" }));
-    expect(within(screen.getByLabelText("评测配置")).queryAllByRole("option")).toHaveLength(1);
+    // One variant in this mode means there is nothing to choose; the select steps aside.
+    expect(screen.queryByRole("combobox", { name: /gsm8k/ })).not.toBeInTheDocument();
   });
 
   it("submits the config the user picked, not just the first one", async () => {
@@ -281,11 +299,13 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
-    await user.selectOptions(screen.getByLabelText("评测配置"), "gsm8k_gen_0_shot_cot_str");
+    await pickDatasets(user, ["gsm8k"]);
+    await user.selectOptions(variantSelect("gsm8k"), "gsm8k_gen_0_shot_cot_str");
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
-    await waitFor(() => expect(submitted.config_name).toBe("gsm8k_gen_0_shot_cot_str"));
+    await waitFor(() =>
+      expect(submitted.config_names).toEqual({ gsm8k: "gsm8k_gen_0_shot_cot_str" }),
+    );
   });
 
   it("refuses to submit a mode the chosen dataset has no configuration for", async () => {
@@ -293,11 +313,12 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "mmlu");
+    await pickDatasets(user, ["mmlu"]);
     await user.click(screen.getByRole("radio", { name: "性能评测" }));
 
     expect(screen.getByRole("button", { name: "提交评测" })).toBeDisabled();
-    expect(screen.getByRole("alert")).toHaveTextContent("性能");
+    // The picked row itself explains what is missing, at the place it was picked.
+    expect(screen.getByRole("alert")).toHaveTextContent("该数据集无此模式配置");
   });
 
   it("does not repeat the model when the endpoint is named after it", async () => {
@@ -328,6 +349,7 @@ describe("new evaluation", () => {
   });
 
   it("offers only installed datasets", async () => {
+    const user = userEvent.setup();
     server.use(
       http.get("/api/datasets", () =>
         HttpResponse.json([GSM8K, { ...MMLU, status: "not_installed" }]),
@@ -335,9 +357,9 @@ describe("new evaluation", () => {
     );
     renderAt("/jobs/new");
 
-    const select = await screen.findByLabelText("数据集");
-    expect(within(select).getByRole("option", { name: /gsm8k/ })).toBeInTheDocument();
-    expect(within(select).queryByRole("option", { name: /mmlu/ })).not.toBeInTheDocument();
+    await user.click(await screen.findByLabelText("数据集"));
+    expect(await screen.findByRole("option", { name: /gsm8k/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /mmlu/ })).not.toBeInTheDocument();
   });
 
   it("leaves the form for the job list once the job is queued", async () => {
@@ -351,7 +373,7 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     // The list is where a submitted job lives; staying on the form hides it.
@@ -372,7 +394,7 @@ describe("new evaluation", () => {
 
     await user.type(await screen.findByLabelText("任务名称"), "夜间基线");
     await user.selectOptions(screen.getByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     await waitFor(() => expect(submitted.name).toBe("夜间基线"));
@@ -384,7 +406,7 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.selectOptions(screen.getByLabelText("模型配置"), "vllm_api_general_chat");
 
     expect(screen.getByLabelText("max_out_len")).toBeInTheDocument();
@@ -404,7 +426,7 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.selectOptions(screen.getByLabelText("模型配置"), "vllm_api_stream_chat");
 
     for (const supplied of ["api_key", "host_ip", "host_port", "url"]) {
@@ -417,7 +439,7 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
 
     // Picking no config still runs one, so its fields show rather than an empty group.
     expect(screen.getByLabelText("returns_tool_calls")).toBeInTheDocument();
@@ -442,7 +464,7 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.selectOptions(screen.getByLabelText("模型配置"), "vllm_api_stream_chat");
     await user.type(screen.getByLabelText("batch_size"), "16");
     await user.type(screen.getByLabelText("temperature"), "0.7");
@@ -465,7 +487,7 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     await waitFor(() => expect(submitted.parameters).toBeDefined());
@@ -486,7 +508,7 @@ describe("new evaluation", () => {
     renderAt("/jobs/new");
 
     await user.selectOptions(await screen.findByLabelText("模型端点"), "model-1");
-    await user.selectOptions(screen.getByLabelText("数据集"), "gsm8k");
+    await pickDatasets(user, ["gsm8k"]);
     await user.click(screen.getByRole("button", { name: "提交评测" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent("not installed yet");

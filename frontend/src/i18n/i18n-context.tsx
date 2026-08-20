@@ -9,7 +9,8 @@ const DEFAULT_LOCALE: Locale = "zh";
 
 interface I18nValue {
   locale: Locale;
-  t: (key: MessageKey) => string;
+  /** Translate a key, filling `{name}` placeholders when the string carries them. */
+  t: (key: MessageKey, params?: Record<string, string>) => string;
   toggleLocale: () => void;
 }
 
@@ -41,7 +42,19 @@ export function I18nProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const value = useMemo<I18nValue>(
-    () => ({ locale, toggleLocale, t: (key: MessageKey) => MESSAGES[locale][key] }),
+    () => ({
+      locale,
+      toggleLocale,
+      t: (key: MessageKey, params?: Record<string, string>) => {
+        const template = MESSAGES[locale][key];
+        if (params === undefined) {
+          return template;
+        }
+        return template.replace(/\{(\w+)\}/g, (match, name: string) =>
+          name in params ? params[name] : match,
+        );
+      },
+    }),
     [locale, toggleLocale],
   );
 

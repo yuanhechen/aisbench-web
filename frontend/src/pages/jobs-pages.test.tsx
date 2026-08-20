@@ -27,6 +27,7 @@ const JOB = {
     config_name: "vllm_api_general_chat",
   },
   dataset: { id: "gsm8k", name: "GSM8K", config_name: "gsm8k_gen_0_shot" },
+  datasets: [],
   parameters: {
     config_fields: { batch_size: 16 },
     generation_kwargs: { temperature: 0.7 },
@@ -39,15 +40,6 @@ const JOB = {
   started_at: "2026-08-18T12:00:01+00:00",
   finished_at: null,
 };
-
-/** The fold holding the run log, named by its summary rather than by its position. */
-function logFold(container: HTMLElement): HTMLElement | null {
-  return (
-    [...container.querySelectorAll("details")].find((fold) =>
-      fold.querySelector("summary")?.textContent?.includes("运行日志"),
-    ) ?? null
-  );
-}
 
 function renderDetail(jobId = "job-1") {
   return render(
@@ -62,60 +54,79 @@ function renderDetail(jobId = "job-1") {
 beforeEach(() => localStorage.clear());
 
 describe("job detail", () => {
-  it("reconnects by fetching log bytes from the last offset", async () => {
-    const requestedOffsets: number[] = [];
-    server.use(
-      http.get("/api/jobs/job-1", () => HttpResponse.json(JOB)),
-      http.get("/api/jobs/job-1/logs", ({ request }) => {
-        const offset = Number(new URL(request.url).searchParams.get("offset") ?? "0");
-        requestedOffsets.push(offset);
-        return HttpResponse.json({
-          offset: offset === 0 ? 64 : 96,
-          text: offset === 0 ? "startup\n" : "completed request batch\n",
-        });
-      }),
-    );
+  it(
+    "resumes a dataset's own log from the last offset it was confirmed",
+    { timeout: 12000 },
+    async () => {
+      const user = userEvent.setup();
+      const requestedOffsets: number[] = [];
+      let completed = 2;
+      const jobAt = () => ({
+        ...JOB,
+        progress: { completed, total: 8 },
+        datasets: [
+          {
+            name: "gsm8k",
+            phase: "inferring",
+            completed,
+            total: 8,
+            rate: null,
+            counters: null,
+            log_available: true,
+            metrics: {},
+            correct_count: null,
+            total_count: null,
+            started_at: "2026-08-18T12:00:01+00:00",
+          },
+        ],
+      });
+      server.use(
+        http.get("/api/jobs/job-1", () => HttpResponse.json(jobAt())),
+        http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
+        http.get("/api/jobs/job-1/datasets/gsm8k/logs", ({ request }) => {
+          const offset = Number(new URL(request.url).searchParams.get("offset") ?? "0");
+          requestedOffsets.push(offset);
+          return HttpResponse.json({
+            offset: offset === 0 ? 24 : 40,
+            text: offset === 0 ? "first line\n" : "second line\n",
+          });
+        }),
+      );
     const fake = installFakeWebSocket();
     renderDetail();
 
-    expect(await screen.findByText(/512 \/ 800/)).toBeInTheDocument();
+    await user.click(await screen.findByRole("button", { name: "查看详情" }));
+    expect(await screen.findByText(/first line/)).toBeInTheDocument();
+
+    // The next poll continues from the confirmed offset, so nothing is duplicated.
+    expect(await screen.findByText(/second line/, {}, { timeout: 6000 })).toBeInTheDocument();
+    await waitFor(() => expect(requestedOffsets).toContain(24));
+    expect(screen.getByText(/first line/).textContent?.match(/first line/g)).toHaveLength(1);
+
+    // A socket event only says "look again"; the job itself is re-read over REST.
+    completed = 8;
     await waitFor(() => expect(fake.sockets).toHaveLength(1));
     fake.sockets[0].open();
-    fake.sockets[0].emitJson({ type: "log", offset: 120 });
-
-    await waitFor(() => expect(requestedOffsets).toContain(64));
-    expect(await screen.findByText(/completed request batch/)).toBeInTheDocument();
-    // The first chunk is never refetched, so nothing is duplicated in the view.
-    expect(screen.getByText(/startup/).textContent?.match(/startup/g)).toHaveLength(1);
+    fake.sockets[0].emitJson({ type: "progress", completed: 8, total: 8 });
+    expect((await screen.findAllByText(/8\/8/, {}, { timeout: 6000 })).length).toBeGreaterThan(0);
     fake.restore();
-  });
+    },
+  );
 
   it("restores everything from REST without any socket event", async () => {
-    server.use(
-      http.get("/api/jobs/job-1", () => HttpResponse.json(JOB)),
-      http.get("/api/jobs/job-1/logs", () =>
-        HttpResponse.json({ offset: 20, text: "restored line\n" }),
-      ),
-    );
+    server.use(http.get("/api/jobs/job-1", () => HttpResponse.json(JOB)));
     const fake = installFakeWebSocket();
     renderDetail();
 
     expect(await screen.findByText(/512 \/ 800/)).toBeInTheDocument();
-    expect(await screen.findByText(/restored line/)).toBeInTheDocument();
     expect(screen.getByText("运行中")).toBeInTheDocument();
     fake.restore();
   });
 
   it("keeps a running job current without any socket event", async () => {
     let progress = { completed: 2, total: 8 };
-    let logOffset = 0;
     server.use(
       http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, progress })),
-      http.get("/api/jobs/job-1/logs", () => {
-        const text = logOffset === 0 ? "first line\n" : "second line\n";
-        logOffset += 10;
-        return HttpResponse.json({ offset: logOffset, text });
-      }),
     );
     const fake = installFakeWebSocket();
     renderDetail();
@@ -125,7 +136,223 @@ describe("job detail", () => {
     progress = { completed: 8, total: 8 };
 
     expect(await screen.findByText(/8 \/ 8/, {}, { timeout: 6000 })).toBeInTheDocument();
-    expect(await screen.findByText(/second line/, {}, { timeout: 6000 })).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("shows each dataset's own progress, and its detail on demand", async () => {
+    const user = userEvent.setup();
+    const datasets = [
+      {
+        name: "ARC-e",
+        phase: "finished",
+        completed: 8,
+        total: 8,
+        rate: null,
+        counters: null,
+        log_available: true,
+        metrics: {},
+        correct_count: null,
+        total_count: null,
+        started_at: "2026-08-18T12:00:01+00:00",
+      },
+      {
+        name: "math",
+        phase: "inferring",
+        completed: 37,
+        total: 100,
+        rate: "41.7 it/s",
+        counters: { POST: 520, RECV: 510, FINISH: 500, FAIL: 2 },
+        log_available: true,
+        metrics: {},
+        correct_count: null,
+        total_count: null,
+        started_at: "2026-08-18T12:00:01+00:00",
+      },
+    ];
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, datasets })),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/datasets/:name/logs", ({ params }) =>
+        HttpResponse.json({
+          offset: params.name === "math" ? 15 : 0,
+          text: params.name === "math" ? "inferring math\n" : "",
+        }),
+      ),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    // Two datasets, each with its own line: one through, one partway.
+    expect(await screen.findByText("ARC-e")).toBeInTheDocument();
+    expect(screen.getByText(/37\/100/)).toBeInTheDocument();
+    expect(screen.getByText(/8\/8/)).toBeInTheDocument();
+    expect(screen.getByText("推理中")).toBeInTheDocument();
+    // The two denominators say which is which: datasets done, samples across them.
+    expect(screen.getByText(/数据集 1\/2/)).toBeInTheDocument();
+    expect(screen.getByText(/样本 45\/108/)).toBeInTheDocument();
+
+    // The detail is one click away: rate, request counters, this dataset's own log.
+    const rows = screen.getAllByRole("button", { name: "查看详情" });
+    await user.click(rows[1]);
+    expect(screen.getByText(/41.7 it\/s/)).toBeInTheDocument();
+    expect(screen.getByText("POST")).toBeInTheDocument();
+    expect(await screen.findByText(/inferring math/)).toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("says the stage instead of a full bar once inference is done and eval is not", async () => {
+    // 100% through the whole evaluation stage reads as "finished"; the bar must not.
+    const datasets = [
+      {
+        name: "gsm8k",
+        phase: "evaluating",
+        completed: 8,
+        total: 8,
+        rate: null,
+        counters: null,
+        log_available: true,
+        metrics: {},
+        correct_count: null,
+        total_count: null,
+        started_at: "2026-08-18T12:00:01+00:00",
+      },
+    ];
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, datasets })),
+      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/datasets/:name/logs", () =>
+        HttpResponse.json({ offset: 0, text: "" }),
+      ),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    expect(await screen.findByText(/推理 8\/8/)).toBeInTheDocument();
+    expect(screen.getByText(/评测中 0\/1/)).toBeInTheDocument();
+    expect(screen.queryByText(/100%/)).not.toBeInTheDocument();
+    fake.restore();
+  });
+
+  it("settles each dataset row into its score where its progress was", async () => {
+    const datasets = [
+      {
+        name: "ARC-e",
+        phase: "finished",
+        completed: 8,
+        total: 8,
+        rate: null,
+        counters: null,
+        log_available: true,
+        metrics: { accuracy: { value: 62.5, text_value: null, unit: null } },
+        correct_count: 7,
+        total_count: 8,
+        started_at: "2026-08-18T12:00:01+00:00",
+      },
+      {
+        name: "math",
+        phase: "failed",
+        completed: 37,
+        total: 100,
+        rate: null,
+        counters: null,
+        log_available: false,
+        metrics: {},
+        correct_count: null,
+        total_count: null,
+        started_at: "2026-08-18T12:00:01+00:00",
+      },
+    ];
+    server.use(
+      http.get("/api/jobs/job-1", () =>
+        HttpResponse.json({ ...JOB, status: "succeeded", datasets }),
+      ),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    // The finished row leads with its named score; the failed row keeps where it stopped.
+    // Auto-expanded, the score sits in the row and in the metrics block alike.
+    expect(await screen.findAllByText("accuracy")).not.toHaveLength(0);
+    expect((await screen.findAllByText("62.5")).length).toBeGreaterThan(0);
+    expect(screen.getByText("(7/8)")).toBeInTheDocument();
+    expect((await screen.findAllByText("失败")).length).toBeGreaterThan(0);
+    fake.restore();
+  });
+
+  it("previews a finished dataset's samples, one verdict per answer", async () => {
+    const user = userEvent.setup();
+    const datasets = [
+      {
+        name: "gsm8k",
+        phase: "finished",
+        completed: 8,
+        total: 8,
+        rate: null,
+        counters: null,
+        log_available: true,
+        metrics: { accuracy: { value: 50.0, text_value: null, unit: null } },
+        correct_count: 4,
+        total_count: 8,
+        started_at: "2026-08-18T12:00:01+00:00",
+      },
+    ];
+    server.use(
+      http.get("/api/jobs/job-1", () =>
+        HttpResponse.json({ ...JOB, status: "succeeded", datasets }),
+      ),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/datasets/:name/samples", () =>
+        HttpResponse.json({
+          source: "eval_details",
+          total: 2,
+          samples: [
+            {
+              id: "0",
+              prompt: "[HUMAN] Question 0",
+              origin_prediction: "raw answer 0",
+              prediction: "answer: 0",
+              reference: "gold 0",
+              correct: true,
+            },
+            {
+              id: "1",
+              prompt: "[HUMAN] Question 1",
+              origin_prediction: "raw answer 1",
+              prediction: "answer: 1",
+              reference: "gold 1",
+              correct: false,
+            },
+          ],
+        }),
+      ),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+    await screen.findAllByText("50");
+    expect(screen.getByText("(4/8)")).toBeInTheDocument();
+
+    // A finished run's page is its results: the samples are already there, no clicking.
+    // One line per sample: the scored answer, the reference, and the verdict.
+    expect(await screen.findByText("answer: 0")).toBeInTheDocument();
+    expect(screen.getByText("answer: 1")).toBeInTheDocument();
+    expect(screen.getByTitle("正确").textContent).toBe("✓");
+    expect(screen.getByTitle("错误").textContent).toBe("✗");
+
+    // A sample row opens to the whole prompt and the raw output.
+    await user.click(screen.getByText("answer: 0"));
+    expect(await screen.findByText(/Question 0/)).toBeInTheDocument();
+    expect(screen.getByText("raw answer 0")).toBeInTheDocument();
+
+    // The wrong-only filter keeps the misses and drops the hits.
+    await user.click(screen.getByRole("button", { name: /只看答错/ }));
+    expect(screen.queryByText("answer: 0")).not.toBeInTheDocument();
+    expect(screen.getByText("answer: 1")).toBeInTheDocument();
     fake.restore();
   });
 
@@ -304,8 +531,12 @@ describe("job detail", () => {
 
     expect(await screen.findByText(/batch_size=16/)).toBeInTheDocument();
     expect(screen.getByText(/temperature=0.7/)).toBeInTheDocument();
-    // A command line, written the way it would have been typed.
-    expect(screen.getByText("--num-prompts 8 --max-num-workers 1 --merge-ds")).toBeInTheDocument();
+    // A command line, one option per line: the flag and the value it ran with.
+    const prompts = within(screen.getByText("--num-prompts").closest("li") ?? document.body);
+    expect(prompts.getByText("8")).toBeInTheDocument();
+    const workers = within(screen.getByText("--max-num-workers").closest("li") ?? document.body);
+    expect(workers.getByText("1")).toBeInTheDocument();
+    expect(screen.getByText("--merge-ds")).toBeInTheDocument();
     expect(screen.queryByText(/object Object/)).not.toBeInTheDocument();
     fake.restore();
   });
@@ -332,38 +563,6 @@ describe("job detail", () => {
     expect(container.querySelector(".progress-track")).toBeNull();
     expect(screen.getByText("14s")).toBeInTheDocument();
     fake.restore();
-  });
-
-  it("shows the log without being asked, whatever the job did", async () => {
-    // Folding it left a one-line bar beside an empty column, and the log is where a run
-    // says what it actually did. Its own scroll caps what it can take from the page.
-    server.use(
-      http.get("/api/jobs/job-1", () =>
-        HttpResponse.json({ ...JOB, status: "failed", error_message: "boom" }),
-      ),
-      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 4, text: "trace" })),
-      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
-    );
-    const fake = installFakeWebSocket();
-    const { container, unmount } = renderDetail();
-
-    await screen.findByText("boom");
-    expect(logFold(container)).toHaveAttribute("open");
-    unmount();
-    fake.restore();
-
-    server.use(
-      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
-      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "done" })),
-      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
-      http.get("/api/jobs/job-1/artifacts", () => HttpResponse.json([])),
-    );
-    const second = installFakeWebSocket();
-    const done = renderDetail();
-
-    await screen.findByText("已成功");
-    expect(logFold(done.container)).toHaveAttribute("open");
-    second.restore();
   });
 
   it("groups the output files and stops repeating the run directory", async () => {

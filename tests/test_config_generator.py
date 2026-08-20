@@ -65,8 +65,7 @@ def test_accuracy_config_uses_manifest_imports_and_escaped_values(tmp_path: Path
     generate_config(
         output,
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(),
         parameters={"num_prompts": 8, "max_num_workers": 1},
     )
@@ -83,8 +82,7 @@ def test_performance_config_uses_perf_dataset_and_stream_flag(tmp_path: Path) ->
     generate_config(
         output,
         mode="performance",
-        dataset_import=GSM8K_PERFORMANCE_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_PERFORMANCE_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(),
         parameters={"cli": {"num_prompts": 32}, "config_fields": {"request_rate": 8}},
     )
@@ -151,8 +149,7 @@ def test_base_url_maps_to_the_root_aisbench_appends_to(
 def test_generated_config_carries_the_service_root_not_a_bare_path() -> None:
     source = render_config(
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(base_url="https://api.example.com/v1"),
         parameters={},
     )
@@ -175,15 +172,13 @@ def test_api_key_reaches_the_file_but_never_the_redacted_copy(tmp_path: Path) ->
     written = generate_config(
         output,
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint,
         parameters={},
     )
     redacted = render_config(
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint,
         parameters={},
         redact_api_key=True,
@@ -201,8 +196,7 @@ def test_config_file_is_readable_only_by_its_owner(tmp_path: Path) -> None:
     generate_config(
         output,
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(),
         parameters={},
     )
@@ -213,8 +207,7 @@ def test_config_file_is_readable_only_by_its_owner(tmp_path: Path) -> None:
 def test_missing_api_key_becomes_the_aisbench_default() -> None:
     source = render_config(
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(api_key=None),
         parameters={},
     )
@@ -233,8 +226,7 @@ def test_hostile_user_strings_round_trip_as_data(tmp_path: Path) -> None:
     generate_config(
         output,
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(
             abbr=hostile_abbr,
             model_name=hostile_model,
@@ -265,8 +257,7 @@ def test_untrusted_import_paths_are_refused(bad_import: str) -> None:
     with pytest.raises(ValueError, match="unsafe config import"):
         render_config(
             mode="accuracy",
-            dataset_import=bad_import,
-            dataset_symbol="gsm8k_datasets",
+            datasets=[(bad_import, "gsm8k_datasets")],
             endpoint=endpoint_snapshot(),
             parameters={},
         )
@@ -276,8 +267,7 @@ def test_untrusted_dataset_symbols_are_refused() -> None:
     with pytest.raises(ValueError, match="unsafe config import"):
         render_config(
             mode="accuracy",
-            dataset_import=GSM8K_ACCURACY_IMPORT,
-            dataset_symbol="datasets, os.system('rm -rf /')",
+            datasets=[(GSM8K_ACCURACY_IMPORT, "datasets, os.system('rm -rf /')")],
             endpoint=endpoint_snapshot(),
             parameters={},
         )
@@ -290,8 +280,7 @@ def test_num_prompts_travels_on_the_command_line() -> None:
     """AISBench's --num-prompts sets exactly the dataset reader range this used to edit."""
     source = render_config(
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(),
         parameters={"num_prompts": 8},
     )
@@ -342,8 +331,7 @@ def test_config_fields_are_whatever_the_chosen_config_file_declares() -> None:
     rather than a fixed list that would invent fields one file lacks and drop fields it has."""
     source = render_config(
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(),
         parameters={
             "config_fields": {"batch_size": 8, "retry": 3, "returns_tool_calls": True},
@@ -364,8 +352,7 @@ def test_a_field_name_that_is_not_an_identifier_is_refused() -> None:
     with pytest.raises(ValueError):
         render_config(
             mode="accuracy",
-            dataset_import=GSM8K_ACCURACY_IMPORT,
-            dataset_symbol="gsm8k_datasets",
+            datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
             endpoint=endpoint_snapshot(),
             parameters={"config_fields": {"batch_size=1)\nimport os\n#": 1}},
         )
@@ -374,8 +361,7 @@ def test_a_field_name_that_is_not_an_identifier_is_refused() -> None:
 def test_untouched_sampling_options_are_left_out_entirely() -> None:
     source = render_config(
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(),
         parameters={},
     )
@@ -390,8 +376,7 @@ def test_worker_count_travels_on_the_command_line_not_in_the_config() -> None:
     do not exist in every release."""
     source = render_config(
         mode="accuracy",
-        dataset_import=GSM8K_ACCURACY_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(),
         parameters={"max_num_workers": 4},
     )
@@ -418,8 +403,7 @@ def test_generated_config_imports_only_verified_modules(mode: str) -> None:
     """
     source = render_config(
         mode=mode,
-        dataset_import=GSM8K_ACCURACY_IMPORT if mode == "accuracy" else GSM8K_PERFORMANCE_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_ACCURACY_IMPORT if mode == "accuracy" else GSM8K_PERFORMANCE_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(),
         parameters={},
     )
@@ -438,8 +422,7 @@ def test_a_chosen_model_config_keeps_its_own_streaming_setting() -> None:
     """Two configs of one class can differ only by stream; overwriting it erases the choice."""
     chosen = render_config(
         mode="performance",
-        dataset_import=GSM8K_PERFORMANCE_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_PERFORMANCE_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(),
         parameters={},
         model_import="ais_bench.benchmark.configs.models.vllm_api.vllm_api_general_chat",
@@ -452,8 +435,7 @@ def test_a_chosen_model_config_keeps_its_own_streaming_setting() -> None:
 def test_the_default_model_config_still_streams_for_performance() -> None:
     source = render_config(
         mode="performance",
-        dataset_import=GSM8K_PERFORMANCE_IMPORT,
-        dataset_symbol="gsm8k_datasets",
+        datasets=[(GSM8K_PERFORMANCE_IMPORT, "gsm8k_datasets")],
         endpoint=endpoint_snapshot(),
         parameters={},
     )
@@ -465,8 +447,7 @@ def test_two_model_configs_of_one_class_still_produce_different_files() -> None:
     """They differ only by stream. Overwriting it made the choice change nothing at all."""
     base = {
         "mode": "performance",
-        "dataset_import": GSM8K_PERFORMANCE_IMPORT,
-        "dataset_symbol": "gsm8k_datasets",
+        "datasets": [(GSM8K_PERFORMANCE_IMPORT, "gsm8k_datasets")],
         "endpoint": endpoint_snapshot(),
         "parameters": {},
     }
@@ -482,3 +463,36 @@ def test_two_model_configs_of_one_class_still_produce_different_files() -> None:
     assert general != streaming
     assert "vllm_api_general_chat import models" in general
     assert "vllm_api_stream_chat import models" in streaming
+
+
+def test_several_datasets_import_under_their_own_aliases() -> None:
+    """One import per dataset, concatenated into the one `datasets` list AISBench expects."""
+    source = render_config(
+        mode="accuracy",
+        datasets=[
+            (GSM8K_ACCURACY_IMPORT, "gsm8k_datasets"),
+            ("ais_bench.benchmark.configs.datasets.mmlu.mmlu_gen_5_shot_chat_prompt", "mmlu_datasets"),
+        ],
+        endpoint=endpoint_snapshot(),
+        parameters={},
+    )
+
+    compile(source, "generated", "exec")
+    assert (
+        f"from {GSM8K_ACCURACY_IMPORT} import gsm8k_datasets as ds_0" in source
+    )
+    assert (
+        "from ais_bench.benchmark.configs.datasets.mmlu.mmlu_gen_5_shot_chat_prompt "
+        "import mmlu_datasets as ds_1" in source
+    )
+    assert "datasets = [*ds_0, *ds_1]" in source
+
+
+def test_a_dataset_list_must_not_be_empty() -> None:
+    with pytest.raises(ValueError, match="at least one dataset"):
+        render_config(
+            mode="accuracy",
+            datasets=[],
+            endpoint=endpoint_snapshot(),
+            parameters={},
+        )

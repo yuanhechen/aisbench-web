@@ -11,6 +11,8 @@
     "screenshot": "node e2e/screenshot.mjs"
   },
   "dependencies": {
+    "@fontsource/fira-code": "^5.3.0",
+    "@fontsource/fira-sans": "^5.3.0",
     "lucide-react": "^0.563.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",

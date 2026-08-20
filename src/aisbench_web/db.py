@@ -170,7 +170,31 @@ MIGRATION_6 = ("ALTER TABLE datasets ADD COLUMN task TEXT NOT NULL DEFAULT ''",)
 # A job needs a name a person chose, not only the dataset it happened to use.
 MIGRATION_7 = ("ALTER TABLE jobs ADD COLUMN name TEXT NOT NULL DEFAULT ''",)
 
-LATEST_SCHEMA_VERSION = 7
+# A run covers several datasets at once and each one progresses on its own schedule; the rows
+# survive the run so the detail page keeps its story after a refresh or a restart.
+MIGRATION_8 = (
+    """
+    CREATE TABLE job_dataset_progress (
+      job_id TEXT NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+      dataset TEXT NOT NULL,
+      phase TEXT NOT NULL,
+      raw_status TEXT,
+      completed INTEGER,
+      total INTEGER,
+      rate TEXT,
+      counters TEXT,
+      log_path TEXT,
+      metrics_json TEXT,
+      correct_count INTEGER,
+      total_count INTEGER,
+      started_at TEXT,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(job_id, dataset)
+    )
+    """,
+)
+
+LATEST_SCHEMA_VERSION = 8
 
 
 class Database:
@@ -230,6 +254,7 @@ class Database:
                 (5, self._apply_migration_5),
                 (6, self._apply_migration_6),
                 (7, self._apply_migration_7),
+                (8, self._apply_migration_8),
             )
             pending = [(version, apply) for version, apply in migrations if version not in applied]
             if not pending:
@@ -257,6 +282,11 @@ class Database:
     @staticmethod
     def _apply_migration_7(connection: sqlite3.Connection) -> None:
         for statement in MIGRATION_7:
+            connection.execute(statement)
+
+    @staticmethod
+    def _apply_migration_8(connection: sqlite3.Connection) -> None:
+        for statement in MIGRATION_8:
             connection.execute(statement)
 
     @staticmethod

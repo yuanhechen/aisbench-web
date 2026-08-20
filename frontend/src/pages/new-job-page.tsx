@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import type { FormEvent } from "react";
 
@@ -15,8 +15,7 @@ interface FormState {
   name: string;
   modelEndpointId: string;
   modelConfigName: string;
-  datasetId: string;
-  configName: string;
+  datasetIds: string[];
   mode: Mode;
   numPrompts: string;
   maxNumWorkers: string;
@@ -40,8 +39,7 @@ const INITIAL: FormState = {
   name: "",
   modelEndpointId: "",
   modelConfigName: "",
-  datasetId: "",
-  configName: "",
+  datasetIds: [],
   mode: "accuracy",
   numPrompts: "8",
   maxNumWorkers: "1",
@@ -55,6 +53,9 @@ const INITIAL: FormState = {
   pressureTime: "",
   specDecode: false,
 };
+
+/** The most datasets one job may combine; the backend enforces the same ceiling. */
+const MAX_DATASETS = 16;
 
 function optionalNumber(value: string): number | undefined {
   const parsed = Number(value);
@@ -97,6 +98,8 @@ export function NewJobPage() {
   });
   const [form, setForm] = useState<FormState>(INITIAL);
   const [overrides, setOverrides] = useState<Overrides>({});
+  /** A config variant the user picked for a dataset, by dataset id. */
+  const [configNames, setConfigNames] = useState<Record<string, string>>({});
   const [queued, setQueued] = useState<Job | null>(null);
   const navigate = useNavigate();
   const [error, setError] = useState<string | null>(null);
@@ -107,13 +110,20 @@ export function NewJobPage() {
     () => (datasets.data ?? []).filter((dataset) => dataset.status === "available"),
     [datasets.data],
   );
-  const selectedDataset = installed.find((dataset) => dataset.id === form.datasetId) ?? null;
   const activeModels = (models.data ?? []).filter((model) => model.is_active);
 
-  // The variants AISBench actually ships for this dataset and mode.
-  const availableConfigs = useMemo(
-    () => (selectedDataset?.configs ?? []).filter((config) => config.mode === form.mode),
-    [selectedDataset, form.mode],
+  // Datasets chosen for this job, in the order they were picked.
+  const selectedDatasets = useMemo(
+    () =>
+      form.datasetIds
+        .map((id) => installed.find((dataset) => dataset.id === id))
+        .filter((dataset): dataset is Dataset => dataset !== undefined),
+    [form.datasetIds, installed],
+  );
+  // A dataset the installed AISBench has no config for in this mode cannot be picked.
+  const configsFor = useCallback(
+    (dataset: Dataset) => dataset.configs.filter((config) => config.mode === form.mode),
+    [form.mode],
   );
   // Sorted flat: the family prefix already groups these visually, and a class grouping
   // repeated the prefix while splitting one serving stack across several headings.
@@ -131,21 +141,20 @@ export function NewJobPage() {
     sortedModelConfigs.find((config) => config.default_for === form.mode) ??
     null;
 
-  const modeUnsupported = selectedDataset !== null && availableConfigs.length === 0;
-  const selectedConfig =
-    availableConfigs.find((config) => config.name === form.configName) ??
-    availableConfigs.find((config) => config.name === selectedDataset?.default_config) ??
-    availableConfigs[0];
+  const atLimit = form.datasetIds.length >= MAX_DATASETS;
 
   const ready =
-    form.modelEndpointId !== "" && selectedDataset !== null && !modeUnsupported && !submitting;
+    form.modelEndpointId !== "" &&
+    selectedDatasets.length > 0 &&
+    selectedDatasets.every((dataset) => configsFor(dataset).length > 0) &&
+    !submitting;
 
   function update<K extends keyof FormState>(field: K, value: FormState[K]) {
     setForm((current) => {
       const next = { ...current, [field]: value };
-      // A variant belongs to one dataset and one mode; changing either invalidates the choice.
-      if (field === "datasetId" || field === "mode") {
-        next.configName = "";
+      // A variant belongs to one mode; switching it invalidates every dataset's choice.
+      if (field === "mode") {
+        setConfigNames({});
       }
       return next;
     });
@@ -154,6 +163,29 @@ export function NewJobPage() {
     if (field === "modelConfigName" || field === "mode") {
       setOverrides({});
     }
+    setQueued(null);
+  }
+
+  function toggleDataset(id: string, checked: boolean) {
+    setForm((current) => {
+      const without = current.datasetIds.filter((dataset) => dataset !== id);
+      return {
+        ...current,
+        datasetIds: checked ? [...without, id].slice(0, MAX_DATASETS) : without,
+      };
+    });
+    if (!checked) {
+      setConfigNames((current) => {
+        const next = { ...current };
+        delete next[id];
+        return next;
+      });
+    }
+    setQueued(null);
+  }
+
+  function pickConfig(id: string, name: string) {
+    setConfigNames((current) => ({ ...current, [id]: name }));
     setQueued(null);
   }
 
@@ -201,9 +233,9 @@ export function NewJobPage() {
       const created = await api.post<Job>("/api/jobs", {
         name: form.name,
         model_endpoint_id: form.modelEndpointId,
-        dataset_id: form.datasetId,
+        dataset_ids: form.datasetIds,
         mode: form.mode,
-        config_name: selectedConfig?.name ?? null,
+        config_names: configNames,
         model_config_name: form.modelConfigName === "" ? null : form.modelConfigName,
         parameters: parameters(),
       });
@@ -220,67 +252,79 @@ export function NewJobPage() {
 
   return (
     <form onSubmit={handleSubmit}>
-      <PageHeader title={t("nav.newJob")} />
+      <PageHeader title={t("nav.newJob")}>
+        <button type="submit" className="button-primary" disabled={!ready}>
+          {t("newJob.submit")}
+        </button>
+      </PageHeader>
 
+      {/* What to run on the left, how to run it on the right: one screen holds the
+          whole form, and the two halves read as one decision each. */}
+      <div className="job-columns">
+      <div className="job-column">
       <section className="form-step">
-        <h2 className="form-step-title">{t("newJob.stepModel")}</h2>
-        <label className="field" htmlFor="job-name">
-          {t("newJob.name")}
-        </label>
-        <input
-          id="job-name"
-          className="input"
-          type="text"
-          placeholder={t("newJob.namePlaceholder")}
-          value={form.name}
-          onChange={(event) => update("name", event.target.value)}
-        />
-
-        <label className="field" htmlFor="job-model">
-          {t("newJob.modelEndpoint")}
-        </label>
-        <select
-          id="job-model"
-          className="input"
-          value={form.modelEndpointId}
-          onChange={(event) => update("modelEndpointId", event.target.value)}
-        >
-          <option value="">{t("newJob.choose")}</option>
-          {activeModels.map((model) => (
-            <option key={model.id} value={model.id}>
-              {describeEndpoint(model)}
-            </option>
-          ))}
-        </select>
-
-        {(modelConfigs.data ?? []).length > 0 && (
-          <>
-            <label className="field" htmlFor="job-model-config">
-              {t("newJob.modelConfig")}
+        <h2 className="form-step-title"><span className="form-step-no">1</span>{t("newJob.stepModel")}</h2>
+        {/* One row of choices a reader takes in at a glance; stacked fields read as a list
+            of separate questions about the same thing. */}
+        <div className="setup-row">
+          <div>
+            <label className="field" htmlFor="job-name">
+              {t("newJob.name")}
+            </label>
+            <input
+              id="job-name"
+              className="input"
+              type="text"
+              placeholder={t("newJob.namePlaceholder")}
+              value={form.name}
+              onChange={(event) => update("name", event.target.value)}
+            />
+          </div>
+          <div>
+            <label className="field" htmlFor="job-model">
+              {t("newJob.modelEndpoint")}
             </label>
             <select
-              id="job-model-config"
+              id="job-model"
               className="input"
-              value={form.modelConfigName}
-              onChange={(event) => update("modelConfigName", event.target.value)}
+              value={form.modelEndpointId}
+              onChange={(event) => update("modelEndpointId", event.target.value)}
             >
-              <option value="">{t("newJob.modelConfigDefault")}</option>
-              {sortedModelConfigs.map((config) => (
-                <option key={config.name} value={config.name}>
-                  {config.name}
+              <option value="">{t("newJob.choose")}</option>
+              {activeModels.map((model) => (
+                <option key={model.id} value={model.id}>
+                  {describeEndpoint(model)}
                 </option>
               ))}
             </select>
-            <p className="field-hint">{t("newJob.modelConfigHint")}</p>
-          </>
+          </div>
+          {(modelConfigs.data ?? []).length > 0 && (
+            <div>
+              <label className="field" htmlFor="job-model-config">
+                {t("newJob.modelConfig")}
+              </label>
+              <select
+                id="job-model-config"
+                className="input"
+                value={form.modelConfigName}
+                onChange={(event) => update("modelConfigName", event.target.value)}
+              >
+                <option value="">{t("newJob.modelConfigDefault")}</option>
+                {sortedModelConfigs.map((config) => (
+                  <option key={config.name} value={config.name}>
+                    {config.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+        </div>
+        {(modelConfigs.data ?? []).length > 0 && (
+          <p className="field-hint">{t("newJob.modelConfigHint")}</p>
         )}
-      </section>
-
-      <section className="form-step">
-        <h2 className="form-step-title">{t("newJob.stepMode")}</h2>
-        <div className="radio-row" role="radiogroup" aria-label={t("newJob.stepMode")}>
+        <div className="segmented" role="radiogroup" aria-label={t("newJob.accuracy")}>
           {(["accuracy", "performance"] as const).map((mode) => (
-            <label key={mode} className="radio-option">
+            <label key={mode} className="segmented-item">
               <input
                 type="radio"
                 name="mode"
@@ -294,58 +338,72 @@ export function NewJobPage() {
       </section>
 
       <section className="form-step">
-        <h2 className="form-step-title">{t("newJob.stepDataset")}</h2>
-        <label className="field" htmlFor="job-dataset">
-          {t("newJob.dataset")}
-        </label>
-        <select
-          id="job-dataset"
-          className="input"
-          value={form.datasetId}
-          onChange={(event) => update("datasetId", event.target.value)}
-        >
-          <option value="">{t("newJob.choose")}</option>
-          {installed.map((dataset) => (
-            <option key={dataset.id} value={dataset.id}>
-              {dataset.name}
-            </option>
-          ))}
-        </select>
-        {modeUnsupported && (
+        <h2 className="form-step-title">
+          {t("newJob.stepDataset")}
+          {form.datasetIds.length > 0 && (
+            <span className="form-step-count">
+              {t("newJob.datasetCount", { count: String(form.datasetIds.length) })}
+            </span>
+          )}
+        </h2>
+        <p className="field-hint">{t("newJob.datasetHint")}</p>
+        <DatasetPicker
+          installed={installed}
+          selectedIds={form.datasetIds}
+          variantsOf={configsFor}
+          atLimit={atLimit}
+          onToggle={toggleDataset}
+        />
+        {/* A picked dataset the mode cannot run must say so where it was picked. */}
+        {selectedDatasets.some((dataset) => configsFor(dataset).length === 0) && (
           <p className="form-error" role="alert">
-            {form.mode === "performance"
-              ? t("newJob.noPerformanceConfig")
-              : t("newJob.noAccuracyConfig")}
+            {t("newJob.noConfigForMode")}
           </p>
         )}
 
-        {availableConfigs.length > 0 && (
+        {selectedDatasets.some((dataset) => configsFor(dataset).length > 1) && (
           <>
-            <label className="field" htmlFor="job-config">
-              {t("newJob.config")}
-            </label>
-            <select
-              id="job-config"
-              className="input"
-              value={selectedConfig?.name ?? ""}
-              onChange={(event) => update("configName", event.target.value)}
-            >
-              {availableConfigs.map((config) => (
-                <option key={config.name} value={config.name}>
-                  {config.name}
-                  {config.name === selectedDataset?.default_config
-                    ? `\u2003${t("newJob.configDefault")}`
-                    : ""}
-                </option>
-              ))}
-            </select>
+            <p className="field">{t("newJob.config")}</p>
+            <div className="ds-variants">
+              {selectedDatasets.map((dataset) => {
+                const variants = configsFor(dataset);
+                if (variants.length <= 1) {
+                  return null;
+                }
+                const chosen =
+                  variants.find((config) => config.name === configNames[dataset.id]) ??
+                  variants.find((config) => config.name === dataset.default_config) ??
+                  variants[0];
+                return (
+                  <label key={dataset.id} className="ds-variant">
+                    <span className="ds-option-name mono">{dataset.name}</span>
+                    <select
+                      className="input"
+                      value={chosen.name}
+                      onChange={(event) => pickConfig(dataset.id, event.target.value)}
+                    >
+                      {variants.map((config) => (
+                        <option key={config.name} value={config.name}>
+                          {config.name}
+                          {config.name === dataset.default_config
+                            ? `\u2003${t("newJob.configDefault")}`
+                            : ""}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                );
+              })}
+            </div>
             <p className="field-hint">{t("newJob.configHint")}</p>
           </>
         )}
       </section>
 
+      </div>
+      <div className="job-column job-column-params">
       <section className="form-step">
-        <h2 className="form-step-title">{t("newJob.stepParameters")}</h2>
+        <h2 className="form-step-title"><span className="form-step-no">3</span>{t("newJob.stepParameters")}</h2>
 
         <div className="param-group">
         <p className="group-title">{t("newJob.groupModelConfig")}</p>
@@ -428,69 +486,198 @@ export function NewJobPage() {
         </div>
 
         {form.mode === "accuracy" ? (
-          <>
-            <CheckboxField
-              label="--dump-eval-details"
-              checked={form.dumpEvalDetails}
-              onChange={(value) => update("dumpEvalDetails", value)}
-            />
-            <CheckboxField
-              label="--merge-ds"
-              checked={form.mergeDatasets}
-              onChange={(value) => update("mergeDatasets", value)}
-            />
-            <CheckboxField
-              label="--dump-extract-rate"
-              checked={form.dumpExtractRate}
-              onChange={(value) => update("dumpExtractRate", value)}
-            />
-          </>
-        ) : (
-          <>
-            <CheckboxField
-              label="--pressure"
-              checked={form.pressure}
-              onChange={(value) => update("pressure", value)}
-            />
-            <CheckboxField
-              label="--spec-decode"
-              checked={form.specDecode}
-              onChange={(value) => update("specDecode", value)}
-            />
-            <CheckboxField
-              label="--mode perf_viz"
-              hint={t("newJob.visualizationHint")}
-              checked={form.visualization}
-              onChange={(value) => update("visualization", value)}
-            />
-          </>
-        )}
+            <>
+              <CheckboxField
+                label="--dump-eval-details"
+                checked={form.dumpEvalDetails}
+                onChange={(value) => update("dumpEvalDetails", value)}
+              />
+              <CheckboxField
+                label="--merge-ds"
+                checked={form.mergeDatasets}
+                onChange={(value) => update("mergeDatasets", value)}
+              />
+              <CheckboxField
+                label="--dump-extract-rate"
+                checked={form.dumpExtractRate}
+                onChange={(value) => update("dumpExtractRate", value)}
+              />
+            </>
+          ) : (
+            <>
+              <CheckboxField
+                label="--pressure"
+                checked={form.pressure}
+                onChange={(value) => update("pressure", value)}
+              />
+              <CheckboxField
+                label="--spec-decode"
+                checked={form.specDecode}
+                onChange={(value) => update("specDecode", value)}
+              />
+              <CheckboxField
+                label="--mode perf_viz"
+                hint={t("newJob.visualizationHint")}
+                checked={form.visualization}
+                onChange={(value) => update("visualization", value)}
+              />
+            </>
+          )}
         </div>
       </section>
 
-      <section className="form-step">
-        <h2 className="form-step-title">{t("newJob.stepReview")}</h2>
-        {error !== null && (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        )}
-        {queued !== null && (
-          <p className="form-success" role="status">
-            {t("newJob.queued")}
-            {queued.queue_position !== null && (
-              <span>
-                {" · "}
-                {t("newJob.queuePosition")} {queued.queue_position}
-              </span>
-            )}
-          </p>
-        )}
-        <button type="submit" className="button-primary" disabled={!ready}>
-          {t("newJob.submit")}
-        </button>
-      </section>
+      </div>
+      </div>
+      {(error !== null || queued !== null) && (
+        <section className="form-step submit-step">
+          {error !== null && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          {queued !== null && (
+            <p className="form-success" role="status">
+              {t("newJob.queued")}
+              {queued.queue_position !== null && (
+                <span>
+                  {" · "}
+                  {t("newJob.queuePosition")} {queued.queue_position}
+                </span>
+              )}
+            </p>
+          )}
+        </section>
+      )}
     </form>
+  );
+}
+
+/**
+ * A searchable dropdown that collects several datasets: type to filter, click to pick,
+ * and the picks sit beneath as removable tags. All of them laid flat was a list to walk;
+ * this is a list to search.
+ */
+function DatasetPicker({
+  installed,
+  selectedIds,
+  variantsOf,
+  atLimit,
+  onToggle,
+}: {
+  installed: Dataset[];
+  selectedIds: string[];
+  variantsOf: (dataset: Dataset) => { mode: string }[];
+  atLimit: boolean;
+  onToggle: (id: string, checked: boolean) => void;
+}) {
+  const { t } = useI18n();
+  const [query, setQuery] = useState("");
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const away = (event: MouseEvent) => {
+      if (rootRef.current !== null && !rootRef.current.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, []);
+
+  const needle = query.trim().toLowerCase();
+  const listed = installed.filter(
+    (dataset) =>
+      needle === "" ||
+      dataset.name.toLowerCase().includes(needle) ||
+      dataset.id.toLowerCase().includes(needle) ||
+      dataset.config_name.toLowerCase().includes(needle),
+  );
+
+  return (
+    <div className="combobox" ref={rootRef}>
+      <label className="field visually-hidden" htmlFor="job-dataset-search">
+        {t("newJob.dataset")}
+      </label>
+      <div className="combobox-control">
+        <input
+          id="job-dataset-search"
+          className="input"
+          role="combobox"
+          aria-expanded={open}
+          placeholder={t("newJob.datasetSearchPlaceholder")}
+          value={query}
+          onFocus={() => setOpen(true)}
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setOpen(false);
+            }
+          }}
+        />
+        {/* The arrow decorates the input; the input itself carries the label. */}
+        <span className="combobox-toggle" aria-hidden>
+          ▾
+        </span>
+      </div>
+      {open && (
+        <div className="combobox-panel" role="listbox" aria-label={t("newJob.dataset")}>
+          {installed.length === 0 && <p className="combobox-empty">{t("newJob.noDatasets")}</p>}
+          {installed.length > 0 && listed.length === 0 && (
+            <p className="combobox-empty">{t("datasets.noMatch")}</p>
+          )}
+          {listed.map((dataset) => {
+            const chosen = selectedIds.includes(dataset.id);
+            const blocked = !chosen && (variantsOf(dataset).length === 0 || atLimit);
+            return (
+              <button
+                type="button"
+                key={dataset.id}
+                role="option"
+                aria-selected={chosen}
+                disabled={blocked}
+                className={`combobox-option${chosen ? " is-selected" : ""}${
+                  blocked ? " is-blocked" : ""
+                }`}
+                onClick={() => onToggle(dataset.id, !chosen)}
+              >
+                <span className="ds-option-name mono">{dataset.name}</span>
+                {dataset.task !== "" && (
+                  <span className="ds-option-task">{dataset.task}</span>
+                )}
+                {chosen && (
+                  <span className="combobox-check" aria-hidden>
+                    ✓
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+      {selectedIds.length > 0 && (
+        <div className="chip-row">
+          {selectedIds.map((id) => {
+            const dataset = installed.find((item) => item.id === id);
+            return (
+              <span key={id} className="chip-token mono">
+                {dataset?.name ?? id}
+                <button
+                  type="button"
+                  aria-label={`${dataset?.name ?? id} ✕`}
+                  onClick={() => onToggle(id, false)}
+                >
+                  ✕
+                </button>
+              </span>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
 

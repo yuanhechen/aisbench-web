@@ -110,8 +110,7 @@ def _checked_import(value: str, *, pattern: re.Pattern, label: str) -> str:
 def render_config(
     *,
     mode: str,
-    dataset_import: str,
-    dataset_symbol: str,
+    datasets: list[tuple[str, str]],
     endpoint: EndpointSnapshot,
     parameters: dict,
     model_import: str | None = None,
@@ -119,13 +118,21 @@ def render_config(
 ) -> str:
     """Render the job config.
 
+    `datasets` holds one (import path, symbol) pair per chosen dataset config; a single
+    dataset renders exactly as it always did, only through the same list path.
     `parameters` separates what the CLI takes from what the model config file holds, because
     those are different things in AISBench and editing one is not editing the other.
     """
     if mode not in MODEL_IMPORTS:
         raise ValueError(f"unknown job mode: {mode!r}")
-    dataset_import = _checked_import(dataset_import, pattern=DOTTED_PATH, label="module")
-    dataset_symbol = _checked_import(dataset_symbol, pattern=IDENTIFIER, label="symbol")
+    if not datasets:
+        raise ValueError("a job config needs at least one dataset")
+
+    checked = []
+    for position, (import_path, symbol) in enumerate(datasets):
+        module = _checked_import(import_path, pattern=DOTTED_PATH, label="module")
+        checked_symbol = _checked_import(symbol, pattern=IDENTIFIER, label="symbol")
+        checked.append((module, checked_symbol, f"ds_{position}"))
     chosen_import = _checked_import(
         model_import or MODEL_IMPORTS[mode], pattern=DOTTED_PATH, label="module"
     )
@@ -139,9 +146,14 @@ def render_config(
         "from mmengine.config import read_base",
         "",
         "with read_base():",
-        f"    from {dataset_import} import {dataset_symbol} as datasets",
+    ]
+    for module, symbol, alias in checked:
+        lines.append(f"    from {module} import {symbol} as {alias}")
+    lines += [
         f"    from {chosen_import} import models",
         f"    from {SUMMARIZER_IMPORTS[mode]} import summarizer",
+        "",
+        "datasets = [" + ", ".join(f"*{alias}" for _, _, alias in checked) + "]",
         "",
         "models[0].update(",
         f"    abbr={endpoint.abbr!r},",
@@ -178,8 +190,7 @@ def generate_config(
     output: Path,
     *,
     mode: str,
-    dataset_import: str,
-    dataset_symbol: str,
+    datasets: list[tuple[str, str]],
     endpoint: EndpointSnapshot,
     parameters: dict,
     model_import: str | None = None,
@@ -191,8 +202,7 @@ def generate_config(
     """
     source = render_config(
         mode=mode,
-        dataset_import=dataset_import,
-        dataset_symbol=dataset_symbol,
+        datasets=datasets,
         endpoint=endpoint,
         parameters=parameters,
         model_import=model_import,

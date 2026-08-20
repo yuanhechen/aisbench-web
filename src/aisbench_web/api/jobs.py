@@ -1,5 +1,6 @@
 import asyncio
 import logging
+from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, status
@@ -7,10 +8,18 @@ from fastapi.websockets import WebSocketDisconnect
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from aisbench_web.datasets.catalog import CatalogEntry, load_catalog, load_model_configs
+from aisbench_web.datasets.scan import DatasetConfig
 from aisbench_web.dependencies import get_current_user, get_user_repository
+from aisbench_web.jobs import dataset_progress
+from aisbench_web.jobs.results import read_dataset_samples, safe_artifact_path
 from aisbench_web.jobs.states import TERMINAL_STATUSES
-from aisbench_web.repositories.datasets import DatasetRepository, DatasetStatus
-from aisbench_web.repositories.jobs import Job, JobRepository
+from aisbench_web.repositories.datasets import Dataset, DatasetRepository, DatasetStatus
+from aisbench_web.repositories.jobs import (
+    Job,
+    JobRepository,
+    StoredDatasetProgress,
+    dataset_entries,
+)
 from aisbench_web.repositories.models import ModelEndpointRepository
 from aisbench_web.repositories.users import User
 from aisbench_web.security import SESSION_COOKIE, session_token_digest
@@ -22,6 +31,7 @@ router = APIRouter()
 LOG_CHUNK_LIMIT = 256 * 1024
 JOB_NOT_FOUND = "job not found"
 JOB_NAME_MAX_LENGTH = 200
+MAX_DATASETS_PER_JOB = 16
 ACCURACY = "accuracy"
 PERFORMANCE = "performance"
 
@@ -75,10 +85,10 @@ class JobParameters(BaseModel):
 class JobCreate(BaseModel):
     name: str = Field(default="", max_length=JOB_NAME_MAX_LENGTH)
     model_endpoint_id: str
-    dataset_id: str
+    dataset_ids: list[str] = Field(min_length=1, max_length=MAX_DATASETS_PER_JOB)
     mode: Literal["accuracy", "performance"]
-    #: A specific AISBench config for this dataset; the first one for the mode when omitted.
-    config_name: str | None = None
+    #: A specific AISBench config per dataset id; the mode's default when a dataset is absent.
+    config_names: dict[str, str] = Field(default_factory=dict)
     #: Which AISBench model config drives the endpoint; the mode's default when omitted.
     model_config_name: str | None = None
     parameters: dict[str, Any] = Field(default_factory=dict)
@@ -118,6 +128,26 @@ class DatasetDisplay(BaseModel):
     config_name: str = ""
 
 
+class DatasetMetricDisplay(BaseModel):
+    value: float | None
+    text_value: str | None
+    unit: str | None
+
+
+class DatasetProgressDisplay(BaseModel):
+    name: str
+    phase: str
+    completed: int | None = None
+    total: int | None = None
+    rate: str | None = None
+    counters: dict[str, Any] | None = None
+    log_available: bool = False
+    metrics: dict[str, DatasetMetricDisplay] = Field(default_factory=dict)
+    correct_count: int | None = None
+    total_count: int | None = None
+    started_at: str | None = None
+
+
 class JobProgress(BaseModel):
     completed: int
     total: int
@@ -132,6 +162,7 @@ class JobResponse(BaseModel):
     progress: JobProgress | None
     model: ModelDisplay
     dataset: DatasetDisplay
+    datasets: list[DatasetProgressDisplay] = Field(default_factory=list)
     parameters: dict
     exit_code: int | None
     error_code: str | None
@@ -163,9 +194,12 @@ def _not_found() -> HTTPException:
     return HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=JOB_NOT_FOUND)
 
 
-def _to_response(job: Job, repository: JobRepository) -> JobResponse:
+def _to_response(
+    job: Job, repository: JobRepository, *, include_datasets: bool = False
+) -> JobResponse:
     model = job.model_snapshot
-    dataset = job.dataset_snapshot
+    entries = dataset_entries(job.dataset_snapshot)
+    first = entries[0] if entries else {}
     ahead = repository.queue_position(job.id)
     return JobResponse(
         id=job.id,
@@ -186,10 +220,11 @@ def _to_response(job: Job, repository: JobRepository) -> JobResponse:
             config_name=model.get("config_name", ""),
         ),
         dataset=DatasetDisplay(
-            id=dataset.get("id", ""),
-            name=dataset.get("name", ""),
-            config_name=dataset.get("config_name", ""),
+            id=first.get("id", ""),
+            name=first.get("name", ""),
+            config_name=first.get("config_name", ""),
         ),
+        datasets=_dataset_rows(job, repository) if include_datasets else [],
         parameters=job.parameters,
         exit_code=job.exit_code,
         error_code=job.error_code,
@@ -200,8 +235,47 @@ def _to_response(job: Job, repository: JobRepository) -> JobResponse:
     )
 
 
-def _catalog_entry(dataset_id: str) -> CatalogEntry | None:
-    return next((entry for entry in load_catalog() if entry.id == dataset_id), None)
+def _dataset_rows(job: Job, repository: JobRepository) -> list[DatasetProgressDisplay]:
+    """Progress rows ordered the way the job was configured, with anything AISBench reported
+    under another name (a merged run) appended after them."""
+    stored = {row.dataset: row for row in repository.list_dataset_progress(job.id)}
+    ordered: list[DatasetProgressDisplay] = []
+    seen: set[str] = set()
+    for entry in dataset_entries(job.dataset_snapshot):
+        # AISBench reports datasets under their abbr, and so do the progress rows.
+        for key in (entry.get("abbr"), entry.get("config_name"), entry.get("name")):
+            row = stored.get(key or "")
+            if row is not None:
+                seen.add(row.dataset)
+                ordered.append(_dataset_display(row))
+                break
+    return ordered + [
+        _dataset_display(row) for name, row in stored.items() if name not in seen
+    ]
+
+
+def _dataset_display(row) -> DatasetProgressDisplay:
+    metrics = row.metrics if isinstance(row.metrics, dict) else {}
+    return DatasetProgressDisplay(
+        name=row.dataset,
+        phase=row.phase,
+        completed=row.completed,
+        total=row.total,
+        rate=row.rate,
+        counters=row.counters,
+        log_available=bool(row.log_path),
+        metrics={
+            name: DatasetMetricDisplay(
+                value=entry.get("value") if isinstance(entry, dict) else None,
+                text_value=entry.get("text_value") if isinstance(entry, dict) else None,
+                unit=entry.get("unit") if isinstance(entry, dict) else None,
+            )
+            for name, entry in metrics.items()
+        },
+        correct_count=row.correct_count,
+        total_count=row.total_count,
+        started_at=row.started_at,
+    )
 
 
 @router.post("/api/jobs", response_model=JobResponse, status_code=status.HTTP_201_CREATED)
@@ -232,33 +306,70 @@ def create_job(
             status_code=status.HTTP_404_NOT_FOUND, detail="model endpoint not found"
         )
 
-    dataset = DatasetRepository(request.app.state.database).get(payload.dataset_id)
-    if dataset is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dataset not found")
-    if dataset.status != DatasetStatus.AVAILABLE.value:
+    datasets = DatasetRepository(request.app.state.database)
+    catalog = load_catalog()
+    unknown_config_keys = set(payload.config_names) - set(payload.dataset_ids)
+    if unknown_config_keys:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="this dataset is not installed yet; install it before submitting a job",
+            detail=(
+                f"config_names names datasets the job does not include: "
+                f"{min(unknown_config_keys)!r}"
+            ),
         )
 
-    entry = _catalog_entry(payload.dataset_id)
-    if entry is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="dataset not found")
-    config = (
-        entry.config_named(payload.config_name)
-        if payload.config_name is not None
-        else entry.default_config(payload.mode)
-    )
-    if config is None:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"this dataset has no {payload.mode} configuration in the installed AISBench",
+    selected: list[tuple[Dataset, CatalogEntry, DatasetConfig]] = []
+    seen_imports: set[str] = set()
+    for dataset_id in dict.fromkeys(payload.dataset_ids):
+        dataset = datasets.get(dataset_id)
+        if dataset is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"dataset {dataset_id!r} not found",
+            )
+        if dataset.status != DatasetStatus.AVAILABLE.value:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"dataset {dataset.name!r} is not installed yet; "
+                    f"install it before submitting a job"
+                ),
+            )
+        entry = next((item for item in catalog if item.id == dataset_id), None)
+        if entry is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"dataset {dataset_id!r} not found",
+            )
+        requested_name = payload.config_names.get(dataset_id)
+        config = (
+            entry.config_named(requested_name)
+            if requested_name is not None
+            else entry.default_config(payload.mode)
         )
-    if config.mode != payload.mode:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"configuration {config.name!r} is a {config.mode} configuration",
-        )
+        if config is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"dataset {dataset.name!r} has no {payload.mode} configuration "
+                    f"in the installed AISBench"
+                ),
+            )
+        if config.mode != payload.mode:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"configuration {config.name!r} is a {config.mode} configuration",
+            )
+        if config.import_path in seen_imports:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"configuration {config.name!r} is already part of this job; "
+                    f"it would run the same dataset twice"
+                ),
+            )
+        seen_imports.add(config.import_path)
+        selected.append((dataset, entry, config))
 
     model_config = None
     if payload.model_config_name is not None:
@@ -282,13 +393,20 @@ def create_job(
     _reject_fields_the_config_does_not_have(model_config, parameters)
 
     encrypted = endpoints.get_encrypted_api_key_for_owner(user.id, endpoint.id)
+    first_dataset, _first_entry, first_config = selected[0]
     job = repository.create(
         owner_id=user.id,
         # AISBench names a config after its dataset, so pairing the two reads "ARC_c ·
         # ARC_c_gen_0_shot_chat_prompt". The config name alone already says both.
-        name=payload.name.strip() or config.name,
+        name=payload.name.strip()
+        or (
+            first_config.name
+            if len(selected) == 1
+            else f"{first_dataset.name} +{len(selected) - 1}"
+        ),
         model_endpoint_id=endpoint.id,
-        dataset_id=dataset.id,
+        # The column carries the first dataset; the snapshot carries all of them.
+        dataset_id=first_dataset.id,
         mode=payload.mode,
         parameters=parameters,
         # Snapshots are display-stable: renaming the endpoint later cannot rewrite history.
@@ -302,15 +420,33 @@ def create_job(
             "encrypted_api_key": None if encrypted is None else encrypted.decode("utf-8"),
         },
         dataset_snapshot={
-            "id": dataset.id,
-            "name": dataset.name,
-            "config_name": config.name,
-            "config_import": config.import_path,
-            "dataset_symbol": config.symbol,
-            "relative_data_path": entry.install_path,
+            "datasets": [
+                {
+                    "id": dataset.id,
+                    "name": dataset.name,
+                    "config_name": config.name,
+                    "config_import": config.import_path,
+                    "dataset_symbol": config.symbol,
+                    "abbr": config.abbr,
+                    "relative_data_path": entry.install_path,
+                }
+                for dataset, entry, config in selected
+            ]
         },
     )
-    return _to_response(job, repository)
+    # The rows exist from the moment the job does, so a page opened straight after
+    # submitting shows every dataset as queued instead of an empty column.
+    repository.replace_dataset_progress(
+        job.id,
+        [
+            dataset_progress.DatasetStatus(
+                dataset=config.abbr, phase=dataset_progress.PHASE_QUEUED
+            )
+            for _, _, config in selected
+            if config.abbr
+        ],
+    )
+    return _to_response(job, repository, include_datasets=True)
 
 
 @router.get("/api/jobs", response_model=list[JobResponse])
@@ -337,7 +473,7 @@ def get_job(
     job = repository.get_for_owner(job_id, user.id)
     if job is None:
         raise _not_found()
-    return _to_response(job, repository)
+    return _to_response(job, repository, include_datasets=True)
 
 
 @router.post("/api/jobs/{job_id}/cancel", response_model=JobResponse)
@@ -372,8 +508,99 @@ def read_logs(
     job = repository.get_for_owner(job_id, user.id)
     if job is None:
         raise _not_found()
+    return _read_log_chunk(settings.jobs_dir / job.log_path, offset)
 
-    log_path = settings.jobs_dir / job.log_path
+
+@router.get("/api/jobs/{job_id}/datasets/{dataset}/logs", response_model=LogChunk)
+def read_dataset_logs(
+    job_id: str,
+    dataset: str,
+    user: CurrentUserDependency,
+    repository: RepositoryDependency,
+    settings: SettingsDependency,
+    offset: int = Query(default=0, ge=0),
+) -> LogChunk:
+    """The log of one dataset's own task, addressed by the name progress reports it under.
+
+    The name is matched against the stored progress rows rather than turned into a path, so
+    it can never address a file outside the job's directory however it is spelled.
+    """
+    job, row = _owned_dataset_row(job_id, dataset, user, repository)
+    if not row.log_path:
+        return LogChunk(offset=offset if offset else 0, text="")
+    try:
+        log_path = safe_artifact_path(settings.jobs_dir / job.id, row.log_path)
+    except ValueError:
+        return LogChunk(offset=offset if offset else 0, text="")
+    return _read_log_chunk(log_path, offset)
+
+
+class SampleDisplay(BaseModel):
+    id: str
+    prompt: str | None
+    origin_prediction: str | None
+    prediction: str | None
+    reference: str | None
+    correct: bool | None
+
+
+class SamplesResponse(BaseModel):
+    #: Which of the run's files the preview was read from; "none" when there is nothing.
+    source: str
+    total: int
+    samples: list[SampleDisplay]
+
+
+@router.get("/api/jobs/{job_id}/datasets/{dataset}/samples", response_model=SamplesResponse)
+def list_dataset_samples(
+    job_id: str,
+    dataset: str,
+    user: CurrentUserDependency,
+    repository: RepositoryDependency,
+    settings: SettingsDependency,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=50, ge=1, le=200),
+) -> SamplesResponse:
+    """A page of per-sample records: what the model was asked, answered, and whether it
+    was right. The evaluator's details when the run dumped them, the predictions file
+    otherwise."""
+    job, _ = _owned_dataset_row(job_id, dataset, user, repository)
+    read = read_dataset_samples(
+        settings.jobs_dir / job.output_dir, str(job.model_snapshot.get("abbr") or ""), dataset
+    )
+    return SamplesResponse(
+        source=read.source,
+        total=read.total,
+        samples=[
+            SampleDisplay(
+                id=sample.id,
+                prompt=sample.prompt,
+                origin_prediction=sample.origin_prediction,
+                prediction=sample.prediction,
+                reference=sample.reference,
+                correct=sample.correct,
+            )
+            for sample in read.samples[offset : offset + limit]
+        ],
+    )
+
+
+def _owned_dataset_row(
+    job_id: str, dataset: str, user: User, repository: JobRepository
+) -> tuple[Job, StoredDatasetProgress]:
+    job = repository.get_for_owner(job_id, user.id)
+    if job is None:
+        raise _not_found()
+    row = repository.get_dataset_progress(job_id, dataset)
+    if row is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="this job reports no dataset under that name",
+        )
+    return job, row
+
+
+def _read_log_chunk(log_path: Path, offset: int) -> LogChunk:
     if not log_path.is_file():
         return LogChunk(offset=offset if offset else 0, text="")
     with log_path.open("rb") as handle:

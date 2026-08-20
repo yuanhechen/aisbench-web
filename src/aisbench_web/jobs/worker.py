@@ -13,12 +13,13 @@ from aisbench_web.jobs.config_generator import (
     generate_config,
     render_config,
 )
+from aisbench_web.jobs.dataset_progress import DatasetProgressCollector
 from aisbench_web.jobs.notifier import JobNotifier
 from aisbench_web.jobs.process_runner import ProcessRunner
 from aisbench_web.jobs.progress import parse_progress
-from aisbench_web.jobs.results import index_artifacts, parse_results
+from aisbench_web.jobs.results import ParsedResults, index_artifacts, parse_results
 from aisbench_web.jobs.states import JobStatus
-from aisbench_web.repositories.jobs import Job, JobRepository
+from aisbench_web.repositories.jobs import Job, JobRepository, dataset_entries
 from aisbench_web.security import api_key_cipher, load_or_create_secret
 from aisbench_web.settings import Settings
 
@@ -26,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 0.1
 IDLE_INTERVAL_SECONDS = 0.5
-ResultParser = Callable[[Job, Path], None]
+#: A custom parser returns results, or None when it could not tell.
+ResultParser = Callable[[Job, Path], ParsedResults | None]
 
 
 def recover_interrupted_jobs(repository: JobRepository) -> int:
@@ -139,13 +141,12 @@ class Worker:
 
         try:
             endpoint = self._endpoint_snapshot(job)
-            dataset_import, dataset_symbol = self._dataset_config(job)
+            datasets = self._dataset_config(job)
             job_dir.mkdir(parents=True, exist_ok=True)
             generate_config(
                 config_path,
                 mode=job.mode,
-                dataset_import=dataset_import,
-                dataset_symbol=dataset_symbol,
+                datasets=datasets,
                 endpoint=endpoint,
                 parameters=job.parameters,
                 model_import=job.model_snapshot.get("config_import") or None,
@@ -187,26 +188,61 @@ class Worker:
     def _await_exit(self, job: Job, process) -> None:
         stop_requested = False
         tail = _LogTail(self.settings.jobs_dir / job.log_path)
+        collector = DatasetProgressCollector(
+            model_abbr=str(job.model_snapshot.get("abbr") or ""),
+            output_dir=self.settings.jobs_dir / job.output_dir,
+        )
+        self._seed_dataset_rows(job, collector)
+        collector.start()
+        # The rows exist before AISBench names its tasks; a page opened this early must
+        # not stare at a blank column while the interpreter is still starting.
+        self._store_dataset_progress(job.id, collector)
         while process.poll() is None:
             if self._stopping.is_set():
                 return
             if not stop_requested and self._stop_requested(job.id):
                 stop_requested = True
                 self.runner.terminate(process, expected_pid=self._recorded_pid(job.id))
-            self._publish_progress(job.id, tail)
+            lines = tail.new_lines()
+            self._publish_progress(job.id, lines)
+            collector.consume_lines(lines)
+            collector.scan()
+            if collector.dirty:
+                collector.dirty = False
+                self._store_dataset_progress(job.id, collector)
             time.sleep(self.poll_interval)
-        self._publish_progress(job.id, tail)
+
+        lines = tail.new_lines()
+        self._publish_progress(job.id, lines)
+        collector.consume_lines(lines)
+        exit_code = process.returncode
+        cancelled = stop_requested or self._stop_requested(job.id)
+        collector.finish(succeeded=exit_code == 0 and not cancelled)
+        self._store_dataset_progress(job.id, collector)
 
         if self._stopping.is_set():
             # The child may exit while stop() is terminating it; stop() records the outcome.
             return
 
-        exit_code = process.returncode
-        if stop_requested or self._stop_requested(job.id):
+        if cancelled:
             self._finish(job.id, JobStatus.CANCELLED, exit_code=exit_code)
             return
         if exit_code == 0:
-            self._parse_results(job)
+            parsed = self._parse_results(job)
+            # AISBench finishes its workflow with exit 0 even when every task failed, so
+            # the results are what decides: none at all means the run failed, not passed.
+            if parsed is not None and not parsed.metrics:
+                self._finish(
+                    job.id,
+                    JobStatus.FAILED,
+                    exit_code=exit_code,
+                    error_code="no_results",
+                    error_message=(
+                        "AISBench exited successfully but produced no results; "
+                        "its tasks failed — see the log."
+                    ),
+                )
+                return
             self._finish(job.id, JobStatus.SUCCEEDED, exit_code=exit_code)
             return
         self._finish(
@@ -217,10 +253,25 @@ class Worker:
             error_message=f"AISBench exited with status {exit_code}",
         )
 
-    def _publish_progress(self, job_id: str, tail: "_LogTail") -> None:
+    @staticmethod
+    def _seed_dataset_rows(job: Job, collector: DatasetProgressCollector) -> None:
+        """Every chosen dataset gets a row from the start, before AISBench names its tasks."""
+        for entry in dataset_entries(job.dataset_snapshot):
+            collector.seed(str(entry.get("abbr") or ""))
+
+    def _store_dataset_progress(self, job_id: str, collector: DatasetProgressCollector) -> None:
+        """Persist before publishing: a page refreshed a moment later must see the same rows."""
+        try:
+            self.repository.replace_dataset_progress(job_id, list(collector.states.values()))
+        except Exception:
+            logger.exception("Storing dataset progress for job %s failed", job_id)
+            return
+        self._publish(job_id, {"type": "datasets"})
+
+    def _publish_progress(self, job_id: str, lines: list[str]) -> None:
         """Report only progress the log actually states; unreadable output stays unreported."""
         latest = None
-        for line in tail.new_lines():
+        for line in lines:
             parsed = parse_progress(line)
             if parsed is not None:
                 latest = parsed
@@ -231,7 +282,7 @@ class Worker:
         self.repository.record_progress(job_id, completed, total)
         self._publish(job_id, {"type": "progress", "completed": completed, "total": total})
 
-    def _store_results(self, job: Job, output_dir: Path) -> None:
+    def _store_results(self, job: Job, output_dir: Path) -> ParsedResults:
         parsed = parse_results(job.mode, output_dir)
         for warning in parsed.warnings:
             logger.info("Job %s: %s", job.id, warning)
@@ -249,12 +300,26 @@ class Worker:
                 for artifact in index_artifacts(output_dir)
             ],
         )
+        # The per-dataset rows carry what each dataset scored, next to how far it got.
+        self.repository.store_dataset_results(
+            job.id,
+            {
+                dataset: {
+                    metric.key: (metric.value, metric.text_value, metric.unit)
+                    for metric in metrics.values()
+                }
+                for dataset, metrics in parsed.per_dataset.items()
+            },
+            parsed.counts,
+        )
+        return parsed
 
-    def _parse_results(self, job: Job) -> None:
+    def _parse_results(self, job: Job) -> ParsedResults | None:
         try:
-            self.result_parser(job, self.settings.jobs_dir / job.output_dir)
+            return self.result_parser(job, self.settings.jobs_dir / job.output_dir)
         except Exception:
             logger.exception("Parsing results for job %s failed", job.id)
+            return None
 
     # -- helpers --------------------------------------------------------------
 
@@ -273,24 +338,27 @@ class Worker:
         )
 
     @staticmethod
-    def _dataset_config(job: Job) -> tuple[str, str]:
-        snapshot = job.dataset_snapshot
-        config_import = snapshot.get("config_import")
-        symbol = snapshot.get("dataset_symbol")
-        if not config_import or not symbol:
+    def _dataset_config(job: Job) -> list[tuple[str, str]]:
+        pairs: list[tuple[str, str]] = []
+        for entry in dataset_entries(job.dataset_snapshot):
+            config_import = entry.get("config_import")
+            symbol = entry.get("dataset_symbol")
+            if not config_import or not symbol:
+                raise ValueError(f"job {job.id} has no dataset config for mode {job.mode!r}")
+            pairs.append((config_import, symbol))
+        if not pairs:
             raise ValueError(f"job {job.id} has no dataset config for mode {job.mode!r}")
-        return config_import, symbol
+        return pairs
 
     def _redact_config(self, job: Job, config_path: Path) -> None:
         """Replace the on-disk config so a decrypted API key is not kept at rest."""
         if not config_path.exists():
             return
         try:
-            dataset_import, dataset_symbol = self._dataset_config(job)
+            datasets = self._dataset_config(job)
             redacted = render_config(
                 mode=job.mode,
-                dataset_import=dataset_import,
-                dataset_symbol=dataset_symbol,
+                datasets=datasets,
                 endpoint=self._endpoint_snapshot(job),
                 parameters=job.parameters,
                 model_import=job.model_snapshot.get("config_import") or None,

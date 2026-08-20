@@ -1,25 +1,49 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import type { PointerEvent as ReactPointerEvent } from "react";
 
 import { api } from "../api/client";
 import type { Job } from "../api/types";
 import { useApiQuery } from "../api/use-query";
 import { useAuth } from "../auth/auth-context";
+import { DatasetRows } from "../components/dataset-progress";
 import { JobResult } from "../components/job-result";
 import { JobArtifacts } from "../components/job-results";
 import type { Artifact } from "../components/job-results";
-import { LogView } from "../components/log-view";
 import { RunConfiguration } from "../components/run-configuration";
 import { ACTIVE_STATUSES, StatusLabel } from "../components/status";
 import { useI18n } from "../i18n/i18n-context";
 
-interface LogChunk {
-  offset: number;
-  text: string;
-}
-
 // A socket only speeds this up. Polling is what guarantees a running job stays current when
 // the socket never connects, which is what happens behind some proxies.
 const ACTIVE_POLL_MS = 2000;
+
+const RAIL_STORAGE_KEY = "aisbench-web.railWidth";
+const RAIL_MIN = 240;
+const RAIL_MAX = 560;
+
+/** The rail's width is a reader's preference; keep it across visits. */
+function storedRailWidth(): number {
+  const saved = Number(window.localStorage.getItem(RAIL_STORAGE_KEY));
+  return Number.isFinite(saved) && saved >= RAIL_MIN && saved <= RAIL_MAX ? saved : 320;
+}
+
+function useWideLayout(): boolean {
+  const [wide, setWide] = useState(() =>
+    typeof window.matchMedia === "function"
+      ? window.matchMedia("(min-width: 1001px)").matches
+      : true,
+  );
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") {
+      return;
+    }
+    const query = window.matchMedia("(min-width: 1001px)");
+    const listener = (event: MediaQueryListEvent) => setWide(event.matches);
+    query.addEventListener("change", listener);
+    return () => query.removeEventListener("change", listener);
+  }, []);
+  return wide;
+}
 
 /** Live events only nudge the page; every value shown is fetched over REST. */
 function eventSocketUrl(jobId: string): string {
@@ -31,7 +55,6 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   const { t } = useI18n();
   const { reportFailure } = useAuth();
   const [job, setJob] = useState<Job | null>(null);
-  const [log, setLog] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [confirmingCancel, setConfirmingCancel] = useState(false);
   // One fetch, two columns: the files list in the rail and the summary reads in the main.
@@ -39,10 +62,32 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
     onFailure: reportFailure,
   });
   const [cancelling, setCancelling] = useState(false);
-  // The last byte the server confirmed; a reconnect resumes from here, never from zero.
-  const offsetRef = useRef(0);
-  const logRef = useRef<HTMLPreElement>(null);
-  const pinnedRef = useRef(true);
+  const wide = useWideLayout();
+  const [railWidth, setRailWidth] = useState(storedRailWidth);
+  // The drag closure needs the latest width without re-binding on every pixel.
+  const railWidthRef = useRef(railWidth);
+  railWidthRef.current = railWidth;
+
+  const dragRail = useCallback((event: ReactPointerEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const handle = event.currentTarget;
+    handle.setPointerCapture(event.pointerId);
+    const startX = event.clientX;
+    const startWidth = railWidthRef.current;
+    const move = (moveEvent: PointerEvent) => {
+      // Dragging the seam left gives the rail more room, and the run less.
+      const width = Math.min(RAIL_MAX, Math.max(RAIL_MIN, startWidth + (startX - moveEvent.clientX)));
+      railWidthRef.current = width;
+      setRailWidth(width);
+      window.localStorage.setItem(RAIL_STORAGE_KEY, String(Math.round(width)));
+    };
+    const up = () => {
+      handle.removeEventListener("pointermove", move);
+      handle.removeEventListener("pointerup", up);
+    };
+    handle.addEventListener("pointermove", move);
+    handle.addEventListener("pointerup", up);
+  }, []);
 
   const refreshJob = useCallback(async () => {
     try {
@@ -54,30 +99,9 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
     }
   }, [jobId, reportFailure]);
 
-  const pullLog = useCallback(async () => {
-    try {
-      const chunk = await api.get<LogChunk>(
-        `/api/jobs/${jobId}/logs?offset=${offsetRef.current}`,
-      );
-      if (chunk.text !== "") {
-        const view = logRef.current;
-        // Follow the tail only while the reader is already at the bottom.
-        pinnedRef.current =
-          view === null || view.scrollTop + view.clientHeight >= view.scrollHeight - 24;
-        offsetRef.current = chunk.offset;
-        setLog((current) => current + chunk.text);
-      }
-    } catch (failure) {
-      reportFailure(failure);
-    }
-  }, [jobId, reportFailure]);
-
   useEffect(() => {
-    offsetRef.current = 0;
-    setLog("");
     void refreshJob();
-    void pullLog();
-  }, [jobId, refreshJob, pullLog]);
+  }, [refreshJob]);
 
   const active = job !== null && ACTIVE_STATUSES.includes(job.status);
 
@@ -87,30 +111,22 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
     }
     const timer = setInterval(() => {
       void refreshJob();
-      void pullLog();
     }, ACTIVE_POLL_MS);
     return () => clearInterval(timer);
-  }, [active, refreshJob, pullLog]);
+  }, [active, refreshJob]);
 
   useEffect(() => {
     const socket = new WebSocket(eventSocketUrl(jobId));
     const handleMessage = () => {
       // REST is authoritative: an event only says "something changed, go look".
       void refreshJob();
-      void pullLog();
     };
     socket.addEventListener("message", handleMessage as EventListener);
     return () => {
       socket.removeEventListener("message", handleMessage as EventListener);
       socket.close();
     };
-  }, [jobId, refreshJob, pullLog]);
-
-  useEffect(() => {
-    if (pinnedRef.current && logRef.current !== null) {
-      logRef.current.scrollTop = logRef.current.scrollHeight;
-    }
-  }, [log]);
+  }, [jobId, refreshJob]);
 
   async function cancel() {
     setCancelling(true);
@@ -140,7 +156,9 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
   }
 
   const cancellable = active;
-  const elapsed = durationBetween(job.started_at, job.finished_at);
+  // While the run is live its clock ticks in the main column; the rail would only
+  // duplicate it with a coarser rhythm. Finished, the rail keeps the final figure.
+  const elapsed = active ? null : durationBetween(job.started_at, job.finished_at);
 
   return (
     <div className="task-view">
@@ -191,8 +209,12 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
         </div>
       </header>
 
-      {/* Main column carries what happened; the rail carries what it was run with. */}
-      <div className="task-columns">
+      {/* Main column carries what happened; the rail carries what it was run with. The seam
+          between them is draggable: some runs are read for their parameters, some for rows. */}
+      <div
+        className="task-columns"
+        style={wide ? { gridTemplateColumns: `minmax(0, 1fr) 40px ${railWidth}px` } : undefined}
+      >
         <div className="task-main">
           {job.error_message !== null && (
             <p className="banner banner-danger" role="alert">
@@ -207,51 +229,56 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
             </p>
           )}
 
-          {/* A finished job has no progress left to report; the status badge already said so. */}
-          {active && job.progress !== null && (
-            <section>
-              <div className="progress">
-                <div className="progress-line">
-                  {t("jobDetail.progress")} {job.progress.completed} / {job.progress.total}
-                  {job.progress.total > 0 &&
-                    ` · ${Math.round((job.progress.completed / job.progress.total) * 100)}%`}
-                </div>
-                {job.progress.total > 0 && (
-                  <div className="progress-track">
-                    <div
-                      className="progress-fill"
-                      style={{
-                        width: `${Math.min(
-                          100,
-                          (job.progress.completed / job.progress.total) * 100,
-                        )}%`,
-                      }}
-                    />
+          {/* Per-dataset rows while any exist: progress while it runs, scores after. Rows
+              only the tqdm pipeline can offer (no status_tmp, older jobs) fall back to it. */}
+          {job.datasets.length > 0 ? (
+            <DatasetRows job={job} jobId={jobId} />
+          ) : (
+            active &&
+            job.progress !== null && (
+              <section>
+                <div className="progress">
+                  <div className="progress-line">
+                    {t("jobDetail.progress")} {job.progress.completed} / {job.progress.total}
+                    {job.progress.total > 0 &&
+                      ` · ${Math.round((job.progress.completed / job.progress.total) * 100)}%`}
                   </div>
-                )}
-              </div>
-            </section>
+                  {job.progress.total > 0 && (
+                    <div className="progress-track">
+                      <div
+                        className="progress-fill"
+                        style={{
+                          width: `${Math.min(
+                            100,
+                            (job.progress.completed / job.progress.total) * 100,
+                          )}%`,
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </section>
+            )
           )}
 
-          {job.status === "succeeded" && (
+          {job.status === "succeeded" && job.datasets.length === 0 && (
             <JobResult
               jobId={jobId}
               artifacts={artifacts.data ?? []}
               datasetName={job.dataset.name}
             />
           )}
-
-          {/* Open by default in every state. It is where the run says what it actually
-              did, and its own scroll caps how much of the page it can take. */}
-          <details className="card-log" open>
-            <summary>
-              {t("jobDetail.log")}
-              {active && <span className="live-dot" aria-label={t("jobDetail.live")} />}
-            </summary>
-            <LogView ref={logRef} text={log} empty={t("jobDetail.noLogYet")} />
-          </details>
         </div>
 
+        {wide && (
+          <div
+            className="rail-seam"
+            role="separator"
+            aria-orientation="vertical"
+            aria-label={t("jobDetail.railResize")}
+            onPointerDown={dragRail}
+          />
+        )}
         <aside className="task-rail">
           <section className="rail-section">
             <h2 className="eyebrow">{t("jobDetail.runInfo")}</h2>
