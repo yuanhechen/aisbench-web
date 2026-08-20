@@ -9,29 +9,33 @@ kbd {
    carries meaning (state, focus, danger) and never decoration. One neutral ramp underpins
    every border, background and shade of text so nothing is picked by eye. */
 :root {
+  /* Neutrals lean warm. The old ramp was uniformly cool — R−B reached −17 at the
+     midtones, and the midtones are most of the page's surface. Cold grey reads as
+     clinical; this reads as paper. Hue 32°, warmth capped at +8 so it never tints.
+     Every step below n-400 clears WCAG AA on white as body text. */
   --n-0: #ffffff;
-  --n-25: #fcfcfd;
-  --n-50: #f7f8f9;
-  --n-100: #f0f1f3;
-  --n-150: #e8eaed;
-  --n-200: #dfe1e5;
-  --n-300: #c9cdd3;
-  --n-400: #a4aab3;
-  --n-500: #767d87;
-  --n-600: #5a616b;
-  --n-700: #40464f;
-  --n-800: #272b31;
-  --n-900: #16181c;
+  --n-25: #fcfcfc;
+  --n-50: #f9f9f9;
+  --n-100: #f4f4f3;
+  --n-150: #ececec;
+  --n-200: #e2e2e1;
+  --n-300: #c8c7c5;
+  --n-400: #a19e9b;
+  --n-500: #787470;
+  --n-600: #6a6662;
+  --n-700: #4d4a47;
+  --n-800: #2d2b29;
+  --n-900: #181716;
 
-  --accent: #2563eb;
-  --accent-strong: #1d4ed8;
-  --accent-weak: #eef3ff;
-  --success: #157347;
-  --success-weak: #e9f5ee;
-  --danger: #b42318;
-  --danger-weak: #fdf0ef;
-  --warn: #96620a;
-  --warn-weak: #fdf4e7;
+  --accent: #0a66c2;
+  --accent-strong: #08528f;
+  --accent-weak: #eaf1fa;
+  --success: #1a7f45;
+  --success-weak: #eaf4ee;
+  --danger: #b3261e;
+  --danger-weak: #fbeeec;
+  --warn: #8a5a10;
+  --warn-weak: #faf2e6;
 
   /* Names the rest of the sheet uses, so a shade is chosen once and referred to by role. */
   --text: var(--n-900);
@@ -60,11 +64,19 @@ kbd {
   --shadow-sm: 0 1px 2px rgb(22 24 28 / 5%);
   --shadow-md: 0 4px 12px -2px rgb(22 24 28 / 10%), 0 2px 4px -2px rgb(22 24 28 / 6%);
   --shadow-lg: 0 16px 40px -8px rgb(22 24 28 / 18%), 0 4px 12px -4px rgb(22 24 28 / 8%);
-  --ring: 0 0 0 3px rgb(37 99 235 / 18%);
+  --ring: 0 0 0 3px rgb(10 102 194 / 18%);
 
-  --sans: "Fira Sans", -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei",
+  /* Two durations, two curves, used everywhere. The short curve starts instantly and
+     settles slowly, which is what a press wants: the finger gets an answer at once. */
+  --a-dur: 0.36s;
+  --a-dur-short: 0.15s;
+  --a-func: cubic-bezier(0.5, 0, 0, 1);
+  --a-func-short: cubic-bezier(0, 0, 0, 1);
+
+  --sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Fira Sans",
     sans-serif;
-  --mono: "Fira Code", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  --mono: ui-monospace, SFMono-Regular, "SF Mono", "Fira Code", Menlo, Consolas, monospace;
 }
 
 /* The label above a group. Small, spaced and quiet, so a heading is felt as a level rather
@@ -158,14 +170,22 @@ summary {
   padding: 7px 9px;
   text-align: left;
   text-decoration: none;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--a-dur-short) var(--a-func-short), color var(--a-dur-short) var(--a-func-short);
   width: 100%;
 }
 
 .sidebar-link svg {
   color: var(--n-500);
   flex-shrink: 0;
-  transition: color 120ms ease;
+  transition:
+    color var(--a-dur-short) var(--a-func-short),
+    transform var(--a-dur) var(--a-func);
+}
+
+/* The icon leads the hover by a hair. Small, but it is the difference between a
+   control that responds and one that only changes colour. */
+.sidebar-link:hover svg {
+  transform: translateX(1px);
 }
 
 .sidebar-link:hover {
@@ -276,6 +296,14 @@ summary {
   text-decoration: underline;
 }
 
+.sidebar-recent-item,
+.data-table a,
+.resource-title a {
+  transition:
+    background var(--a-dur-short) var(--a-func-short),
+    color var(--a-dur-short) var(--a-func-short);
+}
+
 .auth-page {
   align-items: center;
   display: flex;
@@ -369,7 +397,7 @@ summary {
   font: inherit;
   min-height: 34px;
   padding: 6px 10px;
-  transition: border-color 120ms ease, box-shadow 120ms ease;
+  transition: border-color var(--a-dur-short) var(--a-func-short), box-shadow var(--a-dur-short) var(--a-func-short);
   width: 100%;
 }
 
@@ -432,7 +460,11 @@ input[type="radio"] {
   line-height: 1.4;
   min-height: 32px;
   padding: 5px 13px;
-  transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
+  transition:
+    background var(--a-dur-short) var(--a-func-short),
+    border-color var(--a-dur-short) var(--a-func-short),
+    box-shadow var(--a-dur-short) var(--a-func-short),
+    transform var(--a-dur-short) var(--a-func-short);
   white-space: nowrap;
 }
 
@@ -459,12 +491,13 @@ input[type="radio"] {
   border-color: #9a1e14;
 }
 
-/* A press should be felt, not just seen. */
+/* A press should be felt. Scale reads on any size of button; half a pixel of travel
+   did not register at all. */
 .button-primary:active:not(:disabled),
 .button-secondary:active:not(:disabled),
 .button-danger:active:not(:disabled) {
   box-shadow: none;
-  transform: translateY(0.5px);
+  transform: scale(0.97);
 }
 
 .button-primary:disabled,
@@ -589,7 +622,7 @@ input[type="radio"] {
 }
 
 .data-table tbody tr {
-  transition: background 100ms ease;
+  transition: background var(--a-dur-short) var(--a-func-short);
 }
 
 .data-table tbody tr:hover {
@@ -778,7 +811,7 @@ input[type="radio"] {
   font-size: 13px;
   font-weight: 500;
   padding: 4px 16px;
-  transition: background 150ms ease, color 150ms ease;
+  transition: background var(--a-dur-short) var(--a-func-short), color var(--a-dur-short) var(--a-func-short);
 }
 
 .segmented-item input:checked + span {
@@ -1192,7 +1225,9 @@ select.input {
   margin: 0 -6px;
   padding: 3px 6px;
   text-decoration: none;
-  transition: background 120ms ease, color 120ms ease;
+  transition:
+    background var(--a-dur-short) var(--a-func-short),
+    color var(--a-dur-short) var(--a-func-short);
 }
 
 .artifact-list a:hover {
@@ -1239,7 +1274,7 @@ select.input {
   background: var(--accent);
   border-radius: 999px;
   height: 100%;
-  transition: width 300ms ease;
+  transition: width var(--a-dur) var(--a-func);
 }
 
 .live-dot {
@@ -1295,7 +1330,7 @@ select.input {
   border-width: 4px 0 4px 5px;
   content: "";
   display: inline-block;
-  transition: transform 140ms ease;
+  transition: transform var(--a-dur-short) var(--a-func-short);
 }
 
 .card-log[open] {
@@ -1587,7 +1622,7 @@ select.input {
   border-radius: 999px;
   display: block;
   height: 100%;
-  transition: width 300ms ease;
+  transition: width var(--a-dur) var(--a-func);
 }
 
 .ds-phase-failed ~ .ds-bar .ds-bar-fill {
