@@ -115,6 +115,17 @@ export function JobDetailPage({ jobId }: { jobId: string }) {
     return () => clearInterval(timer);
   }, [active, refreshJob]);
 
+  // The files are written as the run ends, so a page opened while it was still going has
+  // only ever seen an empty list. The job payload is polled and heals itself; this does not.
+  const wasActive = useRef(false);
+  const reloadArtifacts = artifacts.reload;
+  useEffect(() => {
+    if (wasActive.current && !active) {
+      reloadArtifacts();
+    }
+    wasActive.current = active;
+  }, [active, reloadArtifacts]);
+
   useEffect(() => {
     const socket = new WebSocket(eventSocketUrl(jobId));
     const handleMessage = () => {

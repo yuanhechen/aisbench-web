@@ -565,6 +565,43 @@ describe("job detail", () => {
     fake.restore();
   });
 
+  it("picks up the output files a run only writes as it ends", async () => {
+    // A page opened while the job was still going has only ever seen an empty file list.
+    // The job payload is polled and heals itself; this list was fetched once and never again,
+    // so the files stayed missing until the reader reloaded the page by hand.
+    let status = "running";
+    server.use(
+      http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status })),
+      http.get("/api/jobs/job-1/logs", () => HttpResponse.json({ offset: 0, text: "" })),
+      http.get("/api/jobs/job-1/metrics", () => HttpResponse.json([])),
+      http.get("/api/jobs/job-1/artifacts", () =>
+        HttpResponse.json(
+          status === "running"
+            ? []
+            : [
+                {
+                  id: "a1",
+                  kind: "summary",
+                  relative_path: "20260819_101550/summary/summary.csv",
+                  content_type: "text/csv",
+                },
+              ],
+        ),
+      ),
+      http.get("/api/jobs/job-1/artifacts/a1", () =>
+        HttpResponse.text("dataset,metric,Qwen3-32B\ngsm8k,accuracy,50.00"),
+      ),
+    );
+    const fake = installFakeWebSocket();
+    renderDetail();
+
+    await screen.findByText("运行中");
+    status = "succeeded";
+
+    expect(await screen.findByText(/原始输出/, {}, { timeout: 6000 })).toBeInTheDocument();
+    fake.restore();
+  }, 20000);
+
   it("groups the output files and stops repeating the run directory", async () => {
     server.use(
       http.get("/api/jobs/job-1", () => HttpResponse.json({ ...JOB, status: "succeeded" })),
